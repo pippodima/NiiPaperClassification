@@ -20,8 +20,10 @@ FOS_MAJOR_CONCEPT_IDS = {
         "C55493867",  # Medical Biotechnology
     ],
     "Agricultural Sciences": [
-        "C154945302",  # Agriculture, Forestry, and Fisheries
-        "C95457728",  # Veterinary Science
+        "T14137",  # Agriculture, Forestry, and Fisheries
+        "T13396",  # Agriculture, Forestry, and Fisheries
+        "T13899",  # Agriculture, Forestry, and Fisheries
+        "T10439",  # Veterinary Science
     ],
     "Social Sciences": [
         "C162324750",  # Economics and Business
