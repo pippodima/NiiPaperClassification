@@ -4,14 +4,36 @@ import matplotlib.pyplot as plt
 
 
 def get_metrics(df, ground_col_label="major_topics", prediction_label="predicted_category"):
-    accuracy = accuracy_score(df[ground_col_label], df[prediction_label])
-    report = classification_report(df['major_topics'], df['predicted_category'])
-    cm = confusion_matrix(df['major_topics'], df['predicted_category'], labels=df['major_topics'].unique())
+    # Extract unique labels in a fixed order
+    labels = sorted(df[ground_col_label].unique())
 
-    sns.heatmap(cm, annot=True, fmt="d", xticklabels=df['major_topics'].unique(),
-                yticklabels=df['major_topics'].unique())
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.savefig("outputs/plots/confusion_matrix.png")
+    # Compute metrics
+    accuracy = accuracy_score(df[ground_col_label], df[prediction_label])
+    report = classification_report(df[ground_col_label], df[prediction_label], zero_division=0)
+    cm = confusion_matrix(df[ground_col_label], df[prediction_label], labels=labels)
+
+    # Create larger figure to fit long labels
+    plt.figure(figsize=(10, 8))
+
+    # Plot confusion matrix
+    sns.heatmap(
+        cm, annot=True, fmt="d", cmap="Blues",
+        xticklabels=labels, yticklabels=labels
+    )
+
+    plt.xlabel("Predicted Labels", fontsize=12)
+    plt.ylabel("True Labels", fontsize=12)
+    plt.title("Confusion Matrix", fontsize=14)
+
+    # Rotate tick labels for readability
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
+
+    # Adjust layout so labels don’t get cut off
+    plt.tight_layout()
+
+    # Save the figure
+    plt.savefig("outputs/plots/confusion_matrix.png", dpi=300)
+    plt.close()
 
     return accuracy, report
