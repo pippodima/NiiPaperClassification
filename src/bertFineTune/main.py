@@ -5,6 +5,9 @@ from train import train_model
 from plot_metrics import plot_training_logs
 
 
+N_EPOCHS = 3
+
+
 def main():
     model_name = "bert-base-uncased"
 
@@ -20,7 +23,7 @@ def main():
     model = get_model(model_name, num_labels=len(le.classes_))
 
     print("🏋️ Training model...")
-    trainer = train_model(model, tokenizer, train_dataset, test_dataset, compute_metrics)
+    trainer = train_model(model, tokenizer, train_dataset, test_dataset, compute_metrics, epochs=N_EPOCHS)
 
     print("💾 Saving model and tokenizer...")
     model.save_pretrained("bert_finetuned_openalex")

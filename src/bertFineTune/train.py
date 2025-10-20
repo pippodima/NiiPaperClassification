@@ -2,13 +2,13 @@ from transformers import TrainingArguments, Trainer
 from tqdm import tqdm
 
 
-def train_model(model, tokenizer, train_dataset, test_dataset, compute_metrics):
+def train_model(model, tokenizer, train_dataset, test_dataset, compute_metrics, epochs=5):
     training_args = TrainingArguments(
         output_dir="outputs/models/bert_finetuned_openalex",
-        num_train_epochs=8,
+        num_train_epochs=epochs,
         eval_strategy="epoch",
         save_strategy="epoch",
-        learning_rate=1.3e-5,
+        learning_rate=1.5e-5,
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         weight_decay=0.01,
