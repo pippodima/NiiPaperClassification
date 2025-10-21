@@ -1,25 +1,63 @@
-from agents.keywords_agent import keyword_agent
-from agents.zero_shot_agent import zero_shot_agent
-from agents.embedding_agent import embedding_agent
-from data.utils import get_n_rows_datasets
-from utils.metrics import get_metrics
-from tqdm import tqdm
-from tmp import multi_agent_classify_tmp
+import requests
+import xml.etree.ElementTree as ET
+
+ns = {
+    'dc': 'http://purl.org/dc/elements/1.1/',
+    'dcterms': 'http://purl.org/dc/terms/',
+    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+    'cinii': 'http://ci.nii.ac.jp/ns/1.0/',
+    'default': 'https://cir.nii.ac.jp/schema/1.0/'
+}
 
 
-def classify_abstract(text):
-    agents = [keyword_agent(text),
-              zero_shot_agent(text),
-              embedding_agent(text)]
-    final_category = max(set(agents), key=agents.count)
-    return final_category
+# Load XML
+def load_xml(xml_text):
+    return ET.fromstring(xml_text)
 
 
+# Extract title
+def extract_title(root):
+    title_elem = root.find('.//dc:title', ns)
+    return title_elem.text if title_elem is not None else None
+
+
+# Extract abstract
+def extract_abstract(root):
+    # Find description element whose type is Abstract
+    for desc in root.findall('.//default:description', ns):
+        type_elem = desc.find('default:type', ns)
+        if type_elem is not None and type_elem.text == 'Abstract':
+            notation_elem = desc.find('default:notation', ns)
+            if notation_elem is not None:
+                return notation_elem.text
+    return None
+
+
+# Extract keywords (subjects)
+def extract_keywords(root):
+    keywords = []
+    # Extract all notation under dcterms:subject
+    for subject in root.findall('.//dcterms:subject', ns):
+        for notation in subject.findall('.//*'):
+            if notation.tag.endswith('notation') and notation.text:
+                keywords.append(notation.text)
+    return keywords
+
+
+# Example usage
 if __name__ == "__main__":
-    tqdm.pandas()
-    df = get_n_rows_datasets(csv_path="data/final/data.csv", rows=20)
-    df["predicted_category"] = df['abstract'].progress_apply(multi_agent_classify_tmp)
-    acc, report = get_metrics(df)
+    uri = "https://cir.nii.ac.jp/crid/1050574411837070592.rdf"
 
-    print("acc: ", acc)
-    print(report)
+    r = requests.get(uri)
+    r.raise_for_status()
+    xml_text = r.text
+    print(xml_text)
+
+    root = load_xml(xml_text)
+    title = extract_title(root)
+    abstract = extract_abstract(root)
+    keywords = extract_keywords(root)
+
+    print("Title:", title)
+    print("Abstract:", abstract)
+    print("Keywords:", keywords)
