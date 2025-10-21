@@ -9,58 +9,47 @@ OUTPUT_FILE = os.path.join(OUTPUT_DIR, "nii.csv")
 CSV_PATH = "raw/article_labels.csv"
 
 
-def get_paper_metadata(uri):
-    r = requests.get(uri)
-    if r.status_code == 404:
-        print(f"⚠️ Not found: {uri}")
-        return None, None, None
-    r.raise_for_status()
-    root = ET.fromstring(r.text)
+ns = {
+    'dc': 'http://purl.org/dc/elements/1.1/',
+    'dcterms': 'http://purl.org/dc/terms/',
+    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+    'cinii': 'http://ci.nii.ac.jp/ns/1.0/',
+    'default': 'https://cir.nii.ac.jp/schema/1.0/'
+}
 
-    ns = {
-        "dc": "http://purl.org/dc/elements/1.1/",
-        "jpcoar": "https://github.com/JPCOAR/schema/blob/master/2.0/",
-        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-        "dcterms": "http://purl.org/dc/terms/",
-        "datacite": "https://schema.datacite.org/meta/kernel-4/",
-        "foaf": "http://xmlns.com/foaf/0.1/"
-    }
 
-    # --- Titles ---
-    titles = [el.text for el in root.findall(".//dc:title", ns) if el.text]
-    title_en = next((t for t in titles if "en" in (t or "").lower()), titles[0] if titles else None)
+# Load XML
+def load_xml(xml_text):
+    return ET.fromstring(xml_text)
 
-    # --- Abstract ---
-    abstract = None
-    for desc_path in [
-        ".//description/notation",
-        ".//datacite:description",
-        ".//dc:description"
-    ]:
-        el = root.find(desc_path, ns)
-        if el is not None and el.text:
-            abstract = el.text.strip()
-            break
 
-    # --- Keywords / Subjects ---
-    keywords = None
+# Extract title
+def extract_title(root):
+    title_elem = root.find('.//dc:title', ns)
+    return title_elem.text if title_elem is not None else None
 
-    # 1. Check dcterms:subject
-    for subj in root.findall(".//dcterms:subject", ns):
-        notation_el = subj.find("./notation")
-        if notation_el is not None and notation_el.text:
-            keywords = notation_el.text.strip()
-            break
 
-    # 2. If nothing, check foaf:topic titles
-    if not keywords:
-        for topic in root.findall(".//foaf:topic", ns):
-            title = topic.attrib.get("{http://purl.org/dc/elements/1.1/}title")
-            if title:
-                keywords = title.strip()
-                break
+# Extract abstract
+def extract_abstract(root):
+    # Find description element whose type is Abstract
+    for desc in root.findall('.//default:description', ns):
+        type_elem = desc.find('default:type', ns)
+        if type_elem is not None and type_elem.text == 'Abstract':
+            notation_elem = desc.find('default:notation', ns)
+            if notation_elem is not None:
+                return notation_elem.text
+    return None
 
-    return title_en, abstract, keywords
+
+# Extract keywords (subjects)
+def extract_keywords(root):
+    keywords = []
+    # Extract all notation under dcterms:subject
+    for subject in root.findall('.//dcterms:subject', ns):
+        for notation in subject.findall('.//*'):
+            if notation.tag.endswith('notation') and notation.text:
+                keywords.append(notation.text)
+    return keywords
 
 
 def main():
@@ -70,10 +59,35 @@ def main():
     keywords = []
 
     for uri in tqdm(df["uri"]):
-        title, abstract, keywords = get_paper_metadata(uri)
-        titles.append(title)
-        abstracts.append(abstract)
+        try:
+            r = requests.get(uri)
+            if r.status_code == 404:
+                print(f"⚠️ Not found: {uri}")
+                titles.append(None)
+                abstracts.append(None)
+                keywords.append(None)
+                continue  # Skip this URI and go to the next
 
+            r.raise_for_status()  # Raise exception for other HTTP errors
+            xml_text = r.text
+
+            root = load_xml(xml_text)
+            title = extract_title(root)
+            abstract = extract_abstract(root)
+            keyword = extract_keywords(root)
+
+            titles.append(title)
+            abstracts.append(abstract)
+            keywords.append(keyword)
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching {uri}: {e}")
+            titles.append(None)
+            abstracts.append(None)
+            keywords.append(None)
+            continue  # Skip to the next URI
+
+    # Save results
     df["titles"] = titles
     df["abstracts"] = abstracts
     df["keywords"] = keywords
