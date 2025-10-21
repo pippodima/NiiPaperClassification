@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 from tqdm import tqdm
 import xml.etree.ElementTree as ET
+from sentence_transformers import SentenceTransformer
 
 OUTPUT_DIR = "raw"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "nii.csv")
@@ -91,9 +92,28 @@ def main():
     df["titles"] = titles
     df["abstracts"] = abstracts
     df["keywords"] = keywords
+
+    df = df.dropna(subset=["titles", "abstracts"])
+    df = df[(df['titles'].str.strip() != '') & (df['abstracts'].str.strip() != '')]  # removes empty strings
+
+    df = df[df['confidence'].str.lower() != 'skip']
+
     df.to_csv(OUTPUT_FILE, index=False)
     print("✅ Finished! Saved to papers_with_metadata.csv")
 
 
+def embed_title_and_abstract():
+    df = pd.read_csv(OUTPUT_FILE)
+    df["embedding"] = df["titles"].astype(str) + ". " + df["abstracts"].astype(str)
+
+    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    # model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
+
+    df["embedding"] = df["embedding"].apply(lambda x: model.encode(x))
+
+    df.to_csv("final/nii.csv")
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    embed_title_and_abstract()
