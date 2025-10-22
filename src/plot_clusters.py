@@ -5,7 +5,6 @@ import pandas as pd
 import plotly.express as px
 
 
-
 def plot():
     df = pd.read_csv("tmp.csv")
     df["embedding"] = df["embedding"].apply(lambda x: np.array([float(i) for i in x.strip("[]").split()]))
