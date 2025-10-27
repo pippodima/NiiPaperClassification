@@ -16,7 +16,6 @@ ns = {
 
 
 def parse_rdf(file_path):
-
     tree = ET.parse(file_path)
     root = tree.getroot()
 
@@ -145,21 +144,9 @@ def process_rdf_folder_batches(root_folder, batch_size=1000, max_docs=None, outp
     print(f"All results saved to {final_output}")
 
 
-def show_db():
-    file_path = "processed/rdf_results_final.csv.gz"
-
-    # Read the first 5 rows directly from the compressed file
-    df = pd.read_csv(file_path, compression='gzip')
-
-    print(df.head())  # Print the first 5 rows
-    print(df.columns)
-    print(df["abstract"])
-
-
 if __name__ == "__main__":
     root_folder = "raw"
     batch_size = 5000
     max_documents = 50000  # or None for all
 
     process_rdf_folder_batches(root_folder, batch_size=batch_size, max_docs=max_documents, output_folder="processed")
-    show_db()
