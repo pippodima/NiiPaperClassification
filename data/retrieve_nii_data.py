@@ -4,10 +4,7 @@ import pandas as pd
 from tqdm import tqdm
 import xml.etree.ElementTree as ET
 from sentence_transformers import SentenceTransformer
-
-OUTPUT_DIR = "raw"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "nii.csv")
-CSV_PATH = "raw/article_labels.csv"
+import langid
 
 
 ns = {
@@ -51,6 +48,11 @@ def extract_keywords(root):
             if notation.tag.endswith('notation') and notation.text:
                 keywords.append(notation.text)
     return keywords
+
+
+def add_language_col(df: pd.DataFrame):
+    df["language"] = df["abstracts"].apply(lambda x: langid.classify(x)[0])
+    return df
 
 
 def main():
@@ -98,20 +100,41 @@ def main():
 
     df = df[df['confidence'].str.lower() != 'skip']
 
+    df = add_language_col(df)
+
     df.to_csv(OUTPUT_FILE, index=False)
     print("✅ Finished! Saved to papers_with_metadata.csv")
 
 
-def embed_title_and_abstract():
-    df = pd.read_csv(OUTPUT_FILE)
-    df["embedding"] = df["titles"].astype(str) + ". " + df["abstracts"].astype(str)
+def remove_jp_papers(df):
+    return df[df["language"] != "ja"]
 
-    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
+OUTPUT_DIR = "final"
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, "data.csv")
+CSV_PATH = "raw/article_labels.csv"
+
+
+def embed_title_and_abstract():
+    df = pd.read_csv(OUTPUT_FILE).sample(n=5000, random_state=42)
+
+    # df = remove_jp_papers(df)
+
+    df["embedding_text"] = df["title"].astype(str) + ". " + df["clean_abstract"].astype(str)
+
+    # model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    model = SentenceTransformer('allenai-specter')
     # model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
 
-    df["embedding"] = df["embedding"].apply(lambda x: model.encode(x))
+    embeddings = model.encode(
+        df["embedding_text"].tolist(),
+        batch_size=32,        # adjust based on your GPU/CPU memory
+        show_progress_bar=True
+    )
 
-    df.to_csv("final/nii.csv")
+    df["embedding"] = embeddings.tolist()
+
+    df.to_csv("final/data_with_embeddings.csv")
 
 
 if __name__ == "__main__":

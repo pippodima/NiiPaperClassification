@@ -68,3 +68,9 @@ def plot_interactive_3d(csv_path="tmp.csv", cluster_col="cluster", title_col="ti
     fig.update_layout(title="3D Interactive Embedding Clusters (t-SNE)")
     fig.show()
 
+
+def plot_embedding(umap_embeddings, labels):
+    plt.figure(figsize=(10, 8))
+    plt.scatter(umap_embeddings[:, 0], umap_embeddings[:, 1], c=labels, cmap='Spectral', s=50)
+    plt.title("Clusters of Papers by Abstract Similarity")
+    plt.show()
