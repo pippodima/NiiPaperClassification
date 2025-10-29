@@ -179,7 +179,11 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
         # Plot clusters
         try:
             plot_embedding(umap_2d, labels)
-            plot_embedding_interactive(df=df_temp, umap_embeddings=umap_2d, labels=labels, i=i)
+            plot_embedding_interactive(df=df_temp,
+                                       umap_embeddings=umap_2d,
+                                       labels=labels,
+                                       neighbors=cfg.get("umap_neighbors"),
+                                       cluster_size=cfg.get("hdb_min_cluster_size"))
         except Exception as e:
             print(f"⚠️ Skipped plotting: {e}")
 
@@ -204,9 +208,10 @@ def main():
 
     # Define configs to try
     configs = [
-        # {"umap_neighbors": 50, "hdb_min_cluster_size": 200},
-        # {"umap_neighbors": 100, "hdb_min_cluster_size": 300},
-        {"umap_neighbors": 150, "hdb_min_cluster_size": 400}
+        {"umap_neighbors": 150, "hdb_min_cluster_size": 5000}
+        # {"umap_neighbors": 250, "hdb_min_cluster_size": 6000},
+        # {"umap_neighbors": 300, "hdb_min_cluster_size": 7000},
+        # {"umap_neighbors": 350, "hdb_min_cluster_size": 8000},
     ]
 
     # Choose naming method: "tfidf" (fast) or "llm" (Ollama semantic)

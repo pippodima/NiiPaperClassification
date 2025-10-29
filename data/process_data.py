@@ -149,6 +149,7 @@ def main():
     show_len(df)
     df = add_embeddings_to_df(df)
     show_len(df)
+
     # df_full_en, df_full_jp, df_title_jp_abstract_en, df_title_en_abstract_jp = split_by_language(df)
     # save(df_full_en, "final/data_eng.csv.gz")
     # save(df_full_jp, "final/data_jp.csv.gz")
@@ -160,4 +161,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    show_len(load_df("final/data.csv.gz"))
