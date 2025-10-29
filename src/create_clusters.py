@@ -1,7 +1,6 @@
 import ast
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from umap import UMAP
 import hdbscan
@@ -88,8 +87,8 @@ def name_clusters(df, labels, text_col="combined_text", method="llm", top_n_word
             continue
 
         # Extract representative keywords via TF-IDF
-        X = vectorizer.fit_transform(cluster_texts)
-        tfidf_sum = np.asarray(X.sum(axis=0)).ravel()
+        x = vectorizer.fit_transform(cluster_texts)
+        tfidf_sum = np.asarray(x.sum(axis=0)).ravel()
         terms = np.array(vectorizer.get_feature_names_out())
         top_terms = terms[np.argsort(tfidf_sum)[::-1][:top_n_words]]
         keywords = ", ".join(top_terms)
@@ -115,6 +114,7 @@ def name_clusters(df, labels, text_col="combined_text", method="llm", top_n_word
                 messages=[{"role": "user", "content": prompt}],
             )
             topic_name = response["message"]["content"].strip()
+            topic_name = topic_name.replace("<think>", "").split("</think>")[-1].strip()
             cluster_names[cluster_id] = topic_name or " / ".join(top_terms[:3])
         except Exception as e:
             print(f"⚠️ Ollama naming failed for cluster {cluster_id}: {e}")
@@ -139,10 +139,8 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
         print(f"⚙️  Running configuration {i}/{len(configs)}: {cfg}")
         print(f"{'='*60}")
 
-        embeddings_norm = normalize(embeddings)
-
         reduced_embeddings = perform_umap(
-            embeddings_norm,
+            embeddings,
             n_neighbors=cfg.get("umap_neighbors", 100),
             min_dist=cfg.get("umap_min_dist", 0.4),
             n_components=cfg.get("umap_components", 10)
@@ -155,7 +153,7 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
             epsilon=cfg.get("hdb_epsilon", 0.3)
         )
 
-        umap_2d = perform_umap(embeddings_norm, n_neighbors=15, min_dist=0.1, n_components=2)
+        umap_2d = perform_umap(embeddings, n_neighbors=15, min_dist=0.1, n_components=2)
         df_temp = df.copy()
         df_temp["cluster_id"] = labels
 
@@ -181,7 +179,7 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
         # Plot clusters
         try:
             plot_embedding(umap_2d, labels)
-            plot_embedding_interactive(df_temp, umap_2d, labels)
+            plot_embedding_interactive(df=df_temp, umap_embeddings=umap_2d, labels=labels, i=i)
         except Exception as e:
             print(f"⚠️ Skipped plotting: {e}")
 
@@ -201,18 +199,18 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
 
 def main():
     save = False
-    input_path = "data/final/data_eng.csv.gz"
+    input_path = "data/final/data.csv.gz"
     df, embeddings = load_embeddings(input_path)
 
     # Define configs to try
     configs = [
-        {"umap_neighbors": 50, "hdb_min_cluster_size": 200},
-        {"umap_neighbors": 100, "hdb_min_cluster_size": 300},
-        {"umap_neighbors": 150, "hdb_min_cluster_size": 400},
+        # {"umap_neighbors": 50, "hdb_min_cluster_size": 200},
+        # {"umap_neighbors": 100, "hdb_min_cluster_size": 300},
+        {"umap_neighbors": 150, "hdb_min_cluster_size": 400}
     ]
 
     # Choose naming method: "tfidf" (fast) or "llm" (Ollama semantic)
-    results = try_multiple_configurations(df, embeddings, configs, name_method="llm")
+    results = try_multiple_configurations(df, embeddings, configs, name_method="tfidf")
 
     if save:
         for i, res in enumerate(results, start=1):

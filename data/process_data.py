@@ -5,6 +5,7 @@ from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+from sklearn.preprocessing import normalize
 tqdm.pandas()
 
 
@@ -52,6 +53,7 @@ def add_abstract_language(df):
         try:
             return detect(text)
         except LangDetectException:
+            print("Error in detecting Language")
             return None
 
     # Detect language for each abstract
@@ -74,7 +76,10 @@ def drop_empty_rows(df):
     return df_clean
 
 
-def add_embeddings_to_df(df, device="mps", text_columns=['title', 'clean_abstract'], model_name="all-MPNet-base-v2", batch_size=64):
+def add_embeddings_to_df(df, device="mps",
+                         text_columns=['title', 'clean_abstract'],
+                         model_name="paraphrase-multilingual-MiniLM-L12-v2",
+                         batch_size=64):
     print("Adding embeddings")
     # Combine specified text columns into one string per row
     texts = (df[text_columns[0]].fillna('') + ' ' + df[text_columns[1]].fillna('')).tolist()
@@ -89,6 +94,8 @@ def add_embeddings_to_df(df, device="mps", text_columns=['title', 'clean_abstrac
         batch_texts = texts[i:i+batch_size]
         batch_embeddings = model.encode(batch_texts, show_progress_bar=False)
         embeddings.extend(batch_embeddings)
+
+    embeddings = normalize(embeddings)
 
     df['embedding'] = [emb.tolist() for emb in embeddings]  # Convert np.array to list for storage
 
@@ -108,6 +115,13 @@ def split_by_language(df, title_col='title_lang', abstract_col='abstract_lang'):
     return df_full_en, df_full_jp, df_title_jp_abstract_en, df_title_en_abstract_jp
 
 
+def remove_empty_lang(df, title_col='title_lang', abstract_col='abstract_lang'):
+    """
+    Drop rows where title_lang or abstract_lang is None/NaN.
+    """
+    return df.dropna(subset=[title_col, abstract_col])
+
+
 def load_sample_random_rows(path, n, random_state=None):
     return pd.read_csv(path, compression="gzip").sample(n=n, random_state=random_state).reset_index(drop=True)
 
@@ -117,19 +131,33 @@ def load_df(path="processed/rdf_results_final.csv.gz"):
     return pd.read_csv(path, compression="gzip")
 
 
+def show_len(df: pd.DataFrame):
+    print(len(df["file"]))
+
+
 def main():
-    # df = load_sample_random_rows("processed/rdf_results_final.csv.gz", 100, random_state=42)
+    # df = load_sample_random_rows("processed/rdf_results_final.csv.gz", 10000, random_state=42)
     df = load_df("processed/rdf_results_final.csv.gz")
+    show_len(df)
     df = drop_empty_rows(df)
+    show_len(df)
     df = apply_clean_text_to_df(df)
+    show_len(df)
     df = add_abstract_language(df)
+    show_len(df)
+    df = remove_empty_lang(df)
+    show_len(df)
     df = add_embeddings_to_df(df)
-    df_full_en, df_full_jp, df_title_jp_abstract_en, df_title_en_abstract_jp = split_by_language(df)
-    save(df_full_en, "final/data_eng.csv.gz")
-    save(df_full_jp, "final/data_jp.csv.gz")
-    save(df_title_en_abstract_jp, "final/data_engTitle_jpAbstract.csv.gz")
-    save(df_title_jp_abstract_en, "final/data_jpTitle_engAbstract.csv.gz")
+    show_len(df)
+    # df_full_en, df_full_jp, df_title_jp_abstract_en, df_title_en_abstract_jp = split_by_language(df)
+    # save(df_full_en, "final/data_eng.csv.gz")
+    # save(df_full_jp, "final/data_jp.csv.gz")
+    # save(df_title_en_abstract_jp, "final/data_engTitle_jpAbstract.csv.gz")
+    # save(df_title_jp_abstract_en, "final/data_jpTitle_engAbstract.csv.gz")
+
+    save(df, "final/data.csv.gz")
 
 
 if __name__ == "__main__":
     main()
+    show_len(load_df("final/data.csv.gz"))

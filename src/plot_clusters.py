@@ -105,7 +105,7 @@ def plot_embedding(umap_embeddings, labels, title="Clusters of Papers by Abstrac
     plt.show()
 
 
-def plot_embedding_interactive(df, umap_embeddings, labels, title="Clusters of Papers by Abstract Similarity"):
+def plot_embedding_interactive(df, umap_embeddings, labels, i, title="Clusters of Papers by Abstract Similarity"):
     # Add embeddings and labels to DataFrame
     df = df.copy()
     df["x"] = umap_embeddings[:, 0]
@@ -145,4 +145,4 @@ def plot_embedding_interactive(df, umap_embeddings, labels, title="Clusters of P
     )
 
     fig.show()
-    fig.write_html("outputs/html/clusters.htm")
+    fig.write_html(f"outputs/html/clusters_config{i}.html")
