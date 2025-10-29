@@ -9,7 +9,7 @@ def create_cluster():
     X = np.vstack(df["embedding"].values)
 
     # Run KMeans
-    kmeans = KMeans(n_clusters=2, random_state=42)
+    kmeans = KMeans(n_clusters=10, random_state=42)
     df["cluster"] = kmeans.fit_predict(X)
     df.to_csv("tmp.csv", index=False)
 

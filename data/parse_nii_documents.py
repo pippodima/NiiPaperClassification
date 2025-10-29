@@ -4,7 +4,6 @@ import os
 import random
 import csv
 import gzip
-import pandas as pd
 
 # Define namespaces
 ns = {
@@ -146,7 +145,7 @@ def process_rdf_folder_batches(root_folder, batch_size=1000, max_docs=None, outp
 
 if __name__ == "__main__":
     root_folder = "raw"
-    batch_size = 5000
-    max_documents = 50000  # or None for all
+    batch_size = 10000
+    max_documents = None  # or None for all (0-150.000)
 
     process_rdf_folder_batches(root_folder, batch_size=batch_size, max_docs=max_documents, output_folder="processed")
