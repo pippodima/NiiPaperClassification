@@ -68,7 +68,7 @@ def plot_interactive_3d(df, cluster_col="cluster", title_col="titles", perplexit
     fig.show()
 
 
-def plot_embedding(umap_embeddings, labels, title="Clusters of Papers by Abstract Similarity"):
+def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, title="Clusters of Papers by Abstract Similarity"):
     # Prepare
     plt.figure(figsize=(10, 8))
     unique_labels = np.unique(labels)
@@ -101,6 +101,8 @@ def plot_embedding(umap_embeddings, labels, title="Clusters of Papers by Abstrac
     # Add subtle white background and frame
     plt.gca().set_facecolor("#fafafa")
     plt.box(True)
+
+    plt.savefig(f"outputs/plots/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
 
     plt.show()
 

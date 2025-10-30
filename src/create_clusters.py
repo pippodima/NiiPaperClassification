@@ -178,7 +178,10 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
 
         # Plot clusters
         try:
-            plot_embedding(umap_2d, labels)
+            plot_embedding(umap_embeddings=umap_2d,
+                           labels=labels,
+                           neighbors=cfg.get("umap_neighbors"),
+                           cluster_size=cfg.get("hdb_min_cluster_size"))
             plot_embedding_interactive(df=df_temp,
                                        umap_embeddings=umap_2d,
                                        labels=labels,
@@ -207,19 +210,19 @@ def main():
     df, embeddings = load_embeddings(input_path)
 
     # Define configs to try
-    configs = [
-        {"umap_neighbors": 150, "hdb_min_cluster_size": 5000}
-        # {"umap_neighbors": 250, "hdb_min_cluster_size": 6000},
-        # {"umap_neighbors": 300, "hdb_min_cluster_size": 7000},
-        # {"umap_neighbors": 350, "hdb_min_cluster_size": 8000},
-    ]
 
+    configs = [
+        {"umap_neighbors": 100, "hdb_min_cluster_size": 3000},
+        {"umap_neighbors": 100, "hdb_min_cluster_size": 4000},
+        {"umap_neighbors": 125, "hdb_min_cluster_size": 2000},
+        {"umap_neighbors": 50, "hdb_min_cluster_size": 3000}
+    ]
     # Choose naming method: "tfidf" (fast) or "llm" (Ollama semantic)
     results = try_multiple_configurations(df, embeddings, configs, name_method="tfidf")
 
     if save:
         for i, res in enumerate(results, start=1):
-            name = f"data/final/data_clustered_config{i}.csv.gz"
+            name = f"data/final/clusters_config_{res['config']['umap_neighbors']}neighbors_{res['config']['hdb_min_cluster_size']}cluster_size.csv.gz"
             print(f"💾 Saving {name}")
             res["df"].to_csv(name, index=False, compression="gzip")
 
