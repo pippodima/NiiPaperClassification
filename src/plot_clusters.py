@@ -1,33 +1,7 @@
-from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import seaborn as sns
-
-
-def plot_interactive_3d(df, cluster_col="cluster", title_col="titles", perplexity=30, random_state=42):
-
-    # Convert embeddings from space-separated string to numpy arrays
-    df["embedding"] = df["embedding"].apply(lambda x: np.array([float(i) for i in x.strip("[]").split()]))
-    X = np.vstack(df["embedding"].values)
-
-    # Reduce to 3D using t-SNE
-    X_3d = TSNE(n_components=3, perplexity=perplexity, random_state=random_state).fit_transform(X)
-
-    # Add 3D coordinates to DataFrame
-    df["x"], df["y"], df["z"] = X_3d[:, 0], X_3d[:, 1], X_3d[:, 2]
-
-    # Create interactive 3D scatter plot
-    fig = px.scatter_3d(
-        df, x="x", y="y", z="z",
-        color=cluster_col,
-        hover_data=[title_col],
-        color_continuous_scale="Viridis"
-    )
-
-    fig.update_traces(marker=dict(size=5))
-    fig.update_layout(title="3D Interactive Embedding Clusters (t-SNE)")
-    fig.show()
 
 
 def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
