@@ -102,7 +102,7 @@ def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, title="Clus
     plt.gca().set_facecolor("#fafafa")
     plt.box(True)
 
-    plt.savefig(f"outputs/plots/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
+    plt.savefig(f"outputs/plots/clusters_scientific_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
 
     plt.show()
 
@@ -147,4 +147,4 @@ def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_s
     )
 
     fig.show()
-    fig.write_html(f"outputs/html/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.html")
+    fig.write_html(f"outputs/html/clusters_config_scientific_{neighbors}neighbors_{cluster_size}cluster_size.html")

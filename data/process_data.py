@@ -46,6 +46,40 @@ def apply_clean_text_to_df(df):
     return df
 
 
+def classify_document_type(df: pd.DataFrame) -> pd.DataFrame:
+    # Define regex patterns for known diagnostic or operational report types
+    diagnostic_patterns = [
+        r'\blhd\s*bolometer\b',
+        r'\blhd\s*flxloop\b',
+        r'\blhd\s*fpellet\b',
+        r'\blhd\s*interferometer\b',
+        r'\blhd\s*cxrs\b',
+        r'\blhd\s*ece\b',
+        r'\blhd\s*diagnostic\b',
+        r'\blhd\s*probe\b'
+    ]
+
+    # Combine into one regex
+    diagnostic_regex = re.compile("|".join(diagnostic_patterns), flags=re.IGNORECASE)
+
+    def detect_type(title: str) -> str:
+        if pd.isna(title):
+            return "unknown"
+        title_clean = str(title).strip().lower()
+        # Identify diagnostic/operational reports
+        if diagnostic_regex.search(title_clean):
+            return "diagnostic_report"
+        # Short generic patterns like "LHD #123" also likely reports
+        if re.search(r'\blhd\s*#?\d+', title_clean):
+            return "diagnostic_report"
+        # Default case
+        return "scientific_paper"
+
+    print("Classifying types")
+    df["type"] = df["title"].progress_apply(detect_type)
+    return df
+
+
 def add_abstract_language(df):
     print("Detecting and applying languages")
 
@@ -138,26 +172,16 @@ def show_len(df: pd.DataFrame):
 def main():
     # df = load_sample_random_rows("processed/rdf_results_final.csv.gz", 10000, random_state=42)
     df = load_df("processed/rdf_results_final.csv.gz")
-    show_len(df)
     df = drop_empty_rows(df)
-    show_len(df)
     df = apply_clean_text_to_df(df)
-    show_len(df)
     df = add_abstract_language(df)
-    show_len(df)
     df = remove_empty_lang(df)
-    show_len(df)
     df = add_embeddings_to_df(df)
-    show_len(df)
-
-    # df_full_en, df_full_jp, df_title_jp_abstract_en, df_title_en_abstract_jp = split_by_language(df)
-    # save(df_full_en, "final/data_eng.csv.gz")
-    # save(df_full_jp, "final/data_jp.csv.gz")
-    # save(df_title_en_abstract_jp, "final/data_engTitle_jpAbstract.csv.gz")
-    # save(df_title_jp_abstract_en, "final/data_jpTitle_engAbstract.csv.gz")
-
+    df = classify_document_type(df)
     save(df, "final/data.csv.gz")
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    df = load_df("final/data.csv.gz")
+    print(df.columns)

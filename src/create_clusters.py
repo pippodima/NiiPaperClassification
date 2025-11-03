@@ -17,11 +17,20 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # 🧩 Data Loading
 # ============================================================
 
-def load_embeddings(path):
-    """Load gzipped CSV with stringified embeddings → numpy array."""
+def load_embeddings(path, subset="full"):
+    """Load gzipped CSV with stringified embeddings → numpy array.
+    subset: 'full', 'scientific_paper', or 'diagnostic_report'
+    """
     print(f"📂 Loading dataset from {path} ...")
     df = pd.read_csv(path, compression="gzip")
     print(f"✅ Loaded {len(df)} rows")
+
+    # Subset based on 'type' column if needed
+    if subset != "full":
+        if "type" not in df.columns:
+            raise ValueError("❌ Dataset must have a 'type' column for subsetting.")
+        df = df[df["type"] == subset]
+        print(f"🔍 Subset to {subset}: {len(df)} rows")
 
     tqdm.pandas(desc="Parsing embeddings")
     embeddings = np.stack(df["embedding"].progress_apply(lambda x: np.array(ast.literal_eval(x), dtype=np.float32)))
@@ -41,7 +50,7 @@ def load_embeddings(path):
 # 🧬 Dimensionality Reduction + Clustering
 # ============================================================
 
-def perform_umap(embeddings, n_neighbors=100, min_dist=0.4, n_components=10, random_state=42):
+def perform_umap(embeddings, n_neighbors=100, min_dist=0.1, n_components=10, random_state=42):
     umap_model = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -207,15 +216,17 @@ def try_multiple_configurations(df, embeddings, configs, name_method="llm"):
 def main():
     save = False
     input_path = "data/final/data.csv.gz"
-    df, embeddings = load_embeddings(input_path)
+    df, embeddings = load_embeddings(path=input_path, subset="scientific_paper")
 
     # Define configs to try
 
     configs = [
-        {"umap_neighbors": 100, "hdb_min_cluster_size": 3000},
-        {"umap_neighbors": 100, "hdb_min_cluster_size": 4000},
-        {"umap_neighbors": 125, "hdb_min_cluster_size": 2000},
-        {"umap_neighbors": 50, "hdb_min_cluster_size": 3000}
+        {"umap_neighbors": 15, "hdb_min_cluster_size": 200},
+        {"umap_neighbors": 30, "hdb_min_cluster_size": 400},
+        {"umap_neighbors": 50, "hdb_min_cluster_size": 500},
+        {"umap_neighbors": 75, "hdb_min_cluster_size": 1000},
+        {"umap_neighbors": 100, "hdb_min_cluster_size": 1250},
+        {"umap_neighbors": 125, "hdb_min_cluster_size": 1500}
     ]
     # Choose naming method: "tfidf" (fast) or "llm" (Ollama semantic)
     results = try_multiple_configurations(df, embeddings, configs, name_method="tfidf")
