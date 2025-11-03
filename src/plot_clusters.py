@@ -1,46 +1,8 @@
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import plotly.express as px
 import seaborn as sns
-
-
-def plot():
-    df = pd.read_csv("tmp.csv")
-    df["embedding"] = df["embedding"].apply(lambda x: np.array([float(i) for i in x.strip("[]").split()]))
-    X = np.vstack(df["embedding"].values)
-
-    X_2d = TSNE(n_components=2, random_state=42).fit_transform(X)
-
-    plt.scatter(X_2d[:,0], X_2d[:,1], c=df["cluster"], cmap="viridis")
-    plt.title("Embedding Clusters (t-SNE)")
-    plt.show()
-
-
-def plot_3d():
-    df = pd.read_csv("tmp.csv")
-    df["embedding"] = df["embedding"].apply(lambda x: np.array([float(i) for i in x.strip("[]").split()]))
-    X = np.vstack(df["embedding"].values)
-
-    # Reduce to 3D
-    X_3d = TSNE(n_components=3, random_state=42).fit_transform(X)
-
-    # Create 3D plot
-    fig = plt.figure(figsize=(10,7))
-    ax = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(X_3d[:,0], X_3d[:,1], X_3d[:,2], c=df["cluster"], cmap="viridis", s=50)
-
-    ax.set_xlabel("TSNE 1")
-    ax.set_ylabel("TSNE 2")
-    ax.set_zlabel("TSNE 3")
-    plt.title("3D Embedding Clusters (t-SNE)")
-
-    # Add colorbar
-    cbar = plt.colorbar(sc)
-    cbar.set_label("Cluster")
-
-    plt.show()
 
 
 def plot_interactive_3d(df, cluster_col="cluster", title_col="titles", perplexity=30, random_state=42):
@@ -68,7 +30,7 @@ def plot_interactive_3d(df, cluster_col="cluster", title_col="titles", perplexit
     fig.show()
 
 
-def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, title="Clusters of Papers by Abstract Similarity"):
+def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
     # Prepare
     plt.figure(figsize=(10, 8))
     unique_labels = np.unique(labels)
@@ -102,12 +64,13 @@ def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, title="Clus
     plt.gca().set_facecolor("#fafafa")
     plt.box(True)
 
-    plt.savefig(f"outputs/plots/clusters_scientific_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
+    if save:
+        plt.savefig(f"outputs/plots/clusters_scientific_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
 
     plt.show()
 
 
-def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_size, title="Clusters of Papers by Abstract Similarity"):
+def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
     # Add embeddings and labels to DataFrame
     df = df.copy()
     df["x"] = umap_embeddings[:, 0]
@@ -147,4 +110,5 @@ def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_s
     )
 
     fig.show()
-    fig.write_html(f"outputs/html/clusters_config_scientific_{neighbors}neighbors_{cluster_size}cluster_size.html")
+    if save:
+        fig.write_html(f"outputs/html/clusters_config_scientific_{neighbors}neighbors_{cluster_size}cluster_size.html")
