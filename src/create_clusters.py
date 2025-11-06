@@ -1,4 +1,6 @@
 import ast
+from datetime import datetime
+import json
 import os
 import re
 import unicodedata
@@ -23,9 +25,29 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ============================================================================
 
 BOILERPLATE_WORDS = {
-    "pdf", "article", "text", "type", "source", "application",
-    "identifier", "pp", "doc", "document", "資料番号", "論文",
-    "著者", "journal", "abstract", "file", "doi", "url"
+    # Generic metadata / file terms
+    "pdf", "article", "text", "file", "document", "doc", "type", "source", "identifier", "application", "url", "doi",
+    "vol", "page", "pp.", "number", "image", "images",
+
+    # Publication info
+    "journal", "issue", "volume", "no", "pp", "page", "report", "論文", "紀要類", "会告など",
+    "preprint", "postprint", "bulletin",
+
+    # Front / back matter (English)
+    "cover", "contents", "index", "appendix", "references",
+    "foreword", "preface", "acknowledgment", "acknowledgement",
+    "editor", "editors", "board",
+
+    # Institutional identifiers (Japanese + English)
+    "faculty", "department", "university", "school",
+    "研究所", "大学", "学部", "センタ", "研究センタ",
+
+    # Japanese structural / editorial words
+    "目次", "索引", "奥付", "編集後記", "巻頭言",
+    "投稿規定", "投稿要領", "編集委員会", "編集部",
+
+    # Misc
+    "about", "overview", "summary", "その他"
 }
 
 # Compile regex patterns once at module level
@@ -145,26 +167,25 @@ def clean_dataframe_for_tfidf(df: pd.DataFrame, text_col: str = "combined_text")
 # DIMENSIONALITY REDUCTION
 # ============================================================================
 
-def perform_umap(embeddings: np.ndarray, n_neighbors: int = 100, min_dist: float = 0.1,
-                 n_components: int = 10, random_state: int = 42) -> np.ndarray:
+def perform_umap(
+    embeddings: np.ndarray,
+    n_neighbors: int = 100,
+    min_dist: float = 0.1,
+    n_components: int = 10,
+    random_state: int = 42,
+    metric: str = "cosine"
+) -> np.ndarray:
     """
     Apply UMAP dimensionality reduction to embeddings.
-
-    Args:
-        embeddings: Input embedding vectors
-        n_neighbors: Number of neighbors for UMAP
-        min_dist: Minimum distance for UMAP
-        n_components: Target dimensionality
-        random_state: Random seed for reproducibility
-
-    Returns:
-        Reduced embeddings
+    Uses cosine distance for text embeddings.
     """
     umap_model = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         n_components=n_components,
-        random_state=random_state
+        metric=metric,
+        random_state=random_state,
+        verbose=False,
     )
     return umap_model.fit_transform(embeddings)
 
@@ -315,7 +336,7 @@ def run_single_configuration(df: pd.DataFrame, embeddings: np.ndarray, config: d
     reduced_embeddings = perform_umap(
         embeddings,
         n_neighbors=config.get("umap_neighbors", 100),
-        min_dist=config.get("umap_min_dist", 0.4),
+        min_dist=config.get("umap_min_dist", 0.2),
         n_components=config.get("umap_components", 10)
     )
 
@@ -378,7 +399,8 @@ def run_single_configuration(df: pd.DataFrame, embeddings: np.ndarray, config: d
         "config": config,
         "df": df_labeled,
         "labels": labels,
-        "cluster_names": cluster_names
+        "cluster_names": cluster_names,
+        "reduced_embeddings": reduced_embeddings,
     }
 
 
@@ -416,21 +438,76 @@ def try_multiple_configurations(df: pd.DataFrame, embeddings: np.ndarray, config
 
 def save_results(results: list, output_dir: str = "data/final") -> None:
     """
-    Save clustering results to compressed CSV files.
+    Save clustering results to disk, including metadata, centroids, and summary log.
 
     Args:
         results: List of result dictionaries from clustering experiments
         output_dir: Directory to save output files
     """
-    os.makedirs(output_dir, exist_ok=True)  # ⬅️ ensure folder exists before saving
+    os.makedirs(output_dir, exist_ok=True)
+    summary_records = []
 
-    for i, res in enumerate(results, start=1):
-        neighbors = res['config']['umap_neighbors']
-        cluster_size = res['config']['hdb_min_cluster_size']
-        filename = f"{output_dir}/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.csv.gz"
+    for res in results:
+        cfg = res["config"]
+        neighbors = cfg["umap_neighbors"]
+        cluster_size = cfg["hdb_min_cluster_size"]
 
-        print(f"💾 Saving {filename}")
-        res["df"].to_csv(filename, index=False, compression="gzip")
+        # --- Save main clustered data ---
+        csv_path = f"{output_dir}/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.csv.gz"
+        print(f"💾 Saving cluster assignments → {csv_path}")
+        res["df"].to_csv(csv_path, index=False, compression="gzip")
+
+        # --- Save UMAP-reduced embeddings ---
+        if "reduced_embeddings" in res:
+            umap_path = f"{output_dir}/umap_{neighbors}_{cluster_size}.npz"
+            np.savez_compressed(umap_path, embeddings=res["reduced_embeddings"])
+            print(f"💾 Saved reduced embeddings → {umap_path}")
+
+        # --- Compute and save cluster centroids ---
+        df_centroids = (
+            res["df"]
+            .loc[res["df"]["cluster_id"] != -1]
+            .groupby("cluster_id")
+            .mean(numeric_only=True)
+        )
+        centroids_path = f"{output_dir}/centroids_{neighbors}_{cluster_size}.csv.gz"
+        df_centroids.to_csv(centroids_path, compression="gzip")
+        print(f"💾 Saved cluster centroids → {centroids_path}")
+
+        # --- Save metadata JSON ---
+        # Convert cluster name keys to plain str (safe for JSON)
+        cluster_names = res.get("cluster_names", {})
+        cluster_names_safe = {str(int(k)): v for k, v in cluster_names.items()}
+
+        meta = {
+            "config": cfg,
+            "n_clusters": len(set(res["labels"])) - (1 if -1 in res["labels"] else 0),
+            "n_outliers": int(list(res["labels"]).count(-1)),
+            "timestamp": datetime.now().isoformat(),
+            "cluster_names": cluster_names_safe,
+        }
+        meta_path = f"{output_dir}/metadata_{neighbors}_{cluster_size}.json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        print(f"💾 Saved metadata → {meta_path}")
+
+        # --- Add to summary ---
+        summary_records.append({
+            "umap_neighbors": neighbors,
+            "hdb_min_cluster_size": cluster_size,
+            "n_clusters": meta["n_clusters"],
+            "n_outliers": meta["n_outliers"],
+            "timestamp": meta["timestamp"],
+        })
+
+    # --- Append/Write summary CSV ---
+    summary_path = os.path.join(output_dir, "results_summary.csv")
+    summary_df = pd.DataFrame(summary_records)
+    if os.path.exists(summary_path):
+        old = pd.read_csv(summary_path)
+        summary_df = pd.concat([old, summary_df], ignore_index=True).drop_duplicates()
+    summary_df.to_csv(summary_path, index=False)
+    print(f"🧾 Updated summary log → {summary_path}")
 
 
 # ============================================================================
@@ -440,8 +517,8 @@ def save_results(results: list, output_dir: str = "data/final") -> None:
 def main():
     """Execute the clustering pipeline."""
     # Configuration
-    SAVE_RESULTS = False
-    SAVE_FIGURES = False
+    SAVE_RESULTS = True
+    SAVE_FIGURES = True
     INPUT_PATH = "data/final/data.csv.gz"
 
     # Load data
@@ -449,12 +526,10 @@ def main():
 
     # Define experimental configurations
     configs = [
-        {"umap_neighbors": 7, "hdb_min_cluster_size": 20},
-        # {"umap_neighbors": 30, "hdb_min_cluster_size": 400},
-        # {"umap_neighbors": 50, "hdb_min_cluster_size": 500},
-        # {"umap_neighbors": 75, "hdb_min_cluster_size": 1000},
-        # {"umap_neighbors": 100, "hdb_min_cluster_size": 1250},
-        # {"umap_neighbors": 125, "hdb_min_cluster_size": 1500}
+        {"umap_neighbors": 5, "hdb_min_cluster_size": 10},
+        {"umap_neighbors": 15, "hdb_min_cluster_size": 100},
+        {"umap_neighbors": 40, "hdb_min_cluster_size": 800},
+        {"umap_neighbors": 80, "hdb_min_cluster_size": 2000},
     ]
 
     # Run experiments
@@ -467,7 +542,7 @@ def main():
 
     # Save results if configured
     if SAVE_RESULTS:
-        save_results(results)
+        save_results(results=results, output_dir="data/results")
 
     print("\n✅ All experiments complete!")
 
