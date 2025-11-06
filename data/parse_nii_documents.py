@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import glob
+import argparse
 import os
 import random
 import csv
@@ -313,20 +314,59 @@ def process_rdf_folder_batches(root_folder: str, batch_size: int = 1000,
 # MAIN PIPELINE
 # ============================================================================
 
+
 def main():
     """Execute the RDF parsing pipeline."""
-    # Configuration
-    ROOT_FOLDER = "raw"
-    BATCH_SIZE = 10000
-    MAX_DOCUMENTS = None  # Set to integer for sample, None for all (0-150,000)
-    OUTPUT_FOLDER = "processed"
+    # -------------------------------
+    # Command-line arguments
+    # -------------------------------
+    parser = argparse.ArgumentParser(description="RDF parsing pipeline")
+    parser.add_argument(
+        "-max-document",
+        "--max-document",
+        type=int,
+        default=None,
+        help="Maximum number of documents to process (default: all)",
+    )
+    parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=int,
+        default=10000,
+        help="Batch size for processing (default: 10000)",
+    )
+    parser.add_argument(
+        "-r",
+        "--root-folder",
+        type=str,
+        default="raw",
+        help="Root folder containing RDF files (default: raw)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-folder",
+        type=str,
+        default="processed",
+        help="Output folder for processed files (default: processed)",
+    )
+    args = parser.parse_args()
 
-    # Process RDF files
+    # -------------------------------
+    # Configuration
+    # -------------------------------
+    ROOT_FOLDER = args.root_folder
+    BATCH_SIZE = args.batch_size
+    MAX_DOCUMENTS = args.max_document
+    OUTPUT_FOLDER = args.output_folder
+
+    # -------------------------------
+    # Run the processing
+    # -------------------------------
     process_rdf_folder_batches(
         root_folder=ROOT_FOLDER,
         batch_size=BATCH_SIZE,
         max_docs=MAX_DOCUMENTS,
-        output_folder=OUTPUT_FOLDER
+        output_folder=OUTPUT_FOLDER,
     )
 
 

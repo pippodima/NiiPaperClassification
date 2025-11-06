@@ -1,3 +1,4 @@
+import argparse
 import ast
 from datetime import datetime
 import json
@@ -516,9 +517,27 @@ def save_results(results: list, output_dir: str = "data/final") -> None:
 
 def main():
     """Execute the clustering pipeline."""
+    parser = argparse.ArgumentParser(description="Create Cluster saving options")
+    parser.add_argument(
+        "-save-result-csv",
+        "--save-result-csv",
+        type=float,
+        default=False,
+        help="True if you want to save csv with clustering column (default: False)",
+    )
+    parser.add_argument(
+        "-save-plots",
+        "--save-plots",
+        type=float,
+        default=False,
+        help="True if you want to save fig and html plots (default: False)",
+    )
+
+    args = parser.parse_args()
+
     # Configuration
-    SAVE_RESULTS = True
-    SAVE_FIGURES = True
+    SAVE_RESULTS = args.save_result_csv
+    SAVE_FIGURES = args.save_plots
     INPUT_PATH = "data/final/data.csv.gz"
 
     # Load data
