@@ -36,8 +36,8 @@ import ollama
 USE_METADATA_FOR_NAMING = True  # Toggle: include metadata keywords in LLM naming
 OUTPUT_DIR = "../data/aggregated_hierarchical"
 MIN_THRESHOLD = 0.5
-MAX_THRESHOLD = 0.9
-THRESHOLD_STEP = 0.1
+MAX_THRESHOLD = 0.95
+THRESHOLD_STEP = 0.03
 LLM_MODEL = "qwen3:1.7b"
 
 
@@ -267,7 +267,7 @@ def iterative_merge(df, metadata):
 def main():
     parser = argparse.ArgumentParser(description="Hierarchical Cluster Aggregation")
     parser.add_argument("--input-dir", type=str, default="../data/results", help="Directory with previous clustering results")
-    parser.add_argument("--naming-method", type=str, choices=["tfidf", "llm"], default="llm", help="Cluster naming method")
+    parser.add_argument("--naming-method", type=str, choices=["tfidf", "llm"], default="tfidf", help="Cluster naming method")
     parser.add_argument("--save-results", type=bool, default=True, help="Save intermediate results")
     args = parser.parse_args()
 

@@ -26,29 +26,17 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ============================================================================
 
 BOILERPLATE_WORDS = {
-    # Generic metadata / file terms
-    "pdf", "article", "text", "file", "document", "doc", "type", "source", "identifier", "application", "url", "doi",
-    "vol", "page", "pp.", "number", "image", "images",
-
-    # Publication info
-    "journal", "issue", "volume", "no", "pp", "page", "report", "論文", "紀要類", "会告など",
-    "preprint", "postprint", "bulletin",
-
-    # Front / back matter (English)
-    "cover", "contents", "index", "appendix", "references",
-    "foreword", "preface", "acknowledgment", "acknowledgement",
-    "editor", "editors", "board",
-
-    # Institutional identifiers (Japanese + English)
-    "faculty", "department", "university", "school",
-    "研究所", "大学", "学部", "センタ", "研究センタ",
-
-    # Japanese structural / editorial words
-    "目次", "索引", "奥付", "編集後記", "巻頭言",
-    "投稿規定", "投稿要領", "編集委員会", "編集部",
-
-    # Misc
-    "about", "overview", "summary", "その他"
+    "type", "text", "article", "pdf", "application", "identifier",
+    "source", "contents", "bulletin", "journal", "paper", "pp",
+    "vol", "board", "editorial", "university", "departmental",
+    "report", "reports", "note", "title", "body", "class",
+    "art", "black",
+    # Japanese structural tokens
+    "表紙", "裏表紙", "目次", "総目次", "索引", "奥付", "会告など",
+    "編集後記", "巻頭言", "論文", "紀要", "紀要類", "センタ",
+    "報告", "年報", "編集委員",
+    # misc
+    "application/pdf", "pdf/application", "type/text",
 }
 
 # Compile regex patterns once at module level
@@ -116,44 +104,41 @@ def create_combined_text(df: pd.DataFrame) -> pd.DataFrame:
 
 def clean_text_for_tfidf(text: str) -> str:
     """
-    Clean text by removing HTML, normalizing Unicode, and filtering boilerplate.
-
-    Args:
-        text: Raw text string
-
-    Returns:
-        Cleaned text string
+    Clean text for TF-IDF analysis, preserving informative words.
+    Less aggressive than before — avoids deleting entire texts.
     """
     if not isinstance(text, str) or not text.strip():
         return ""
 
-    # Remove HTML/XML tags
+    # --- Remove HTML / normalize ---
     text = BeautifulSoup(text, "lxml").get_text(separator=" ")
-
-    # Normalize Unicode and convert fullwidth to halfwidth
     text = unicodedata.normalize("NFKC", text)
     text = mojimoji.zen_to_han(text, kana=False)
 
-    # Remove URLs, emails, and file references
+    # --- Remove URLs, emails, file refs ---
     text = URL_PATTERN.sub(" ", text)
     text = EMAIL_PATTERN.sub(" ", text)
     text = FILE_PATTERN.sub(" ", text)
 
-    # Lowercase for English text
+    # --- Lowercase for English; leave Japanese intact ---
     text = text.lower()
 
-    # Keep only useful characters (Japanese, English, digits)
-    text = NON_USEFUL_CHARS.sub(" ", text)
+    # --- Keep useful characters (Japanese, English, digits, basic symbols) ---
+    text = re.sub(r"[^ぁ-んァ-ン一-龥a-zA-Z0-9\s\-‐–—・､,\.]", " ", text)
 
-    # Remove boilerplate terms
+    # --- Remove boilerplate words (looser: only long exact matches) ---
     boilerplate_pattern = r"\b(" + "|".join(map(re.escape, BOILERPLATE_WORDS)) + r")\b"
     text = re.sub(boilerplate_pattern, " ", text)
 
-    # Remove isolated single letters
-    text = SINGLE_LETTER.sub(" ", text)
+    # --- Don’t kill isolated single letters completely; just normalize ---
+    text = re.sub(r"\b[a-z]\b(?!\d)", " ", text)
 
-    # Normalize whitespace
-    text = WHITESPACE.sub(" ", text).strip()
+    # --- Normalize whitespace ---
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # --- Fallback: if everything’s gone, keep minimal stub ---
+    if len(text.split()) < 2 and len(text) < 5:
+        return "placeholdertext"
 
     return text
 
@@ -223,13 +208,29 @@ def perform_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 300,
 # ============================================================================
 
 def extract_top_tfidf_terms(texts: list, top_n: int = 10) -> list:
-    """Extract top TF-IDF terms from a collection of texts."""
+    """Extract top TF-IDF terms from a collection of texts, safely handling empty vocabularies."""
+    # Remove empty or whitespace-only texts
+    texts = [t for t in texts if isinstance(t, str) and t.strip()]
+    if not texts:
+        return ["placeholdertext"]
+
     vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-    x = vectorizer.fit_transform(texts)
+    try:
+        x = vectorizer.fit_transform(texts)
+    except ValueError:
+        # Happens when all words are stopwords or removed
+        return ["placeholdertext"]
+
+    if x.shape[1] == 0:
+        return ["placeholdertext"]
+
     tfidf_sum = np.asarray(x.sum(axis=0)).ravel()
+    if tfidf_sum.size == 0:
+        return ["placeholdertext"]
+
     terms = np.array(vectorizer.get_feature_names_out())
     top_indices = np.argsort(tfidf_sum)[::-1][:top_n]
-    return terms[top_indices].tolist()
+    return terms[top_indices].tolist() or ["placeholdertext"]
 
 
 def generate_llm_cluster_name(keywords: str, llm_model: str = "qwen3:1.7b") -> str:
@@ -299,6 +300,9 @@ def name_clusters(df: pd.DataFrame, labels: np.ndarray, text_col: str = "combine
 
         # Extract representative keywords via TF-IDF
         top_terms = extract_top_tfidf_terms(cluster_texts, top_n_words)
+        if not top_terms or all(t == "placeholdertext" for t in top_terms):
+            cluster_names[cluster_id] = "Unknown"
+            continue
 
         # Use TF-IDF method
         if method == "tfidf":
@@ -439,11 +443,8 @@ def try_multiple_configurations(df: pd.DataFrame, embeddings: np.ndarray, config
 
 def save_results(results: list, output_dir: str = "data/final") -> None:
     """
-    Save clustering results to disk, including metadata, centroids, and summary log.
-
-    Args:
-        results: List of result dictionaries from clustering experiments
-        output_dir: Directory to save output files
+    Save clustering results to disk, including metadata, true centroids, and summary log.
+    Centroids are computed directly from the UMAP-reduced embeddings, not from the DataFrame.
     """
     os.makedirs(output_dir, exist_ok=True)
     summary_records = []
@@ -464,19 +465,26 @@ def save_results(results: list, output_dir: str = "data/final") -> None:
             np.savez_compressed(umap_path, embeddings=res["reduced_embeddings"])
             print(f"💾 Saved reduced embeddings → {umap_path}")
 
-        # --- Compute and save cluster centroids ---
-        df_centroids = (
-            res["df"]
-            .loc[res["df"]["cluster_id"] != -1]
-            .groupby("cluster_id")
-            .mean(numeric_only=True)
-        )
+        # --- Compute and save cluster centroids (using reduced embeddings) ---
+        valid_mask = res["labels"] != -1
+        embeddings = res["reduced_embeddings"][valid_mask]
+        cluster_ids = np.array(res["labels"])[valid_mask]
+
+        centroids = []
+        for cid in np.unique(cluster_ids):
+            mask = cluster_ids == cid
+            centroid_vec = embeddings[mask].mean(axis=0)
+            centroids.append({
+                "cluster_id": int(cid),
+                **{f"dim_{i}": float(v) for i, v in enumerate(centroid_vec)}
+            })
+
+        df_centroids = pd.DataFrame(centroids)
         centroids_path = f"{output_dir}/centroids_{neighbors}_{cluster_size}.csv.gz"
-        df_centroids.to_csv(centroids_path, compression="gzip")
+        df_centroids.to_csv(centroids_path, index=False, compression="gzip")
         print(f"💾 Saved cluster centroids → {centroids_path}")
 
         # --- Save metadata JSON ---
-        # Convert cluster name keys to plain str (safe for JSON)
         cluster_names = res.get("cluster_names", {})
         cluster_names_safe = {str(int(k)): v for k, v in cluster_names.items()}
 
@@ -522,14 +530,14 @@ def main():
         "-save-result-csv",
         "--save-result-csv",
         type=float,
-        default=False,
+        default=True,
         help="True if you want to save csv with clustering column (default: False)",
     )
     parser.add_argument(
         "-save-plots",
         "--save-plots",
         type=float,
-        default=False,
+        default=True,
         help="True if you want to save fig and html plots (default: False)",
     )
 
@@ -546,9 +554,9 @@ def main():
     # Define experimental configurations
     configs = [
         {"umap_neighbors": 5, "hdb_min_cluster_size": 10},
-        {"umap_neighbors": 15, "hdb_min_cluster_size": 100},
-        {"umap_neighbors": 40, "hdb_min_cluster_size": 800},
-        {"umap_neighbors": 80, "hdb_min_cluster_size": 2000},
+        # {"umap_neighbors": 15, "hdb_min_cluster_size": 100},
+        # {"umap_neighbors": 40, "hdb_min_cluster_size": 800},
+        # {"umap_neighbors": 80, "hdb_min_cluster_size": 2000},
     ]
 
     # Run experiments
