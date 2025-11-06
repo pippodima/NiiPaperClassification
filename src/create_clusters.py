@@ -1,4 +1,5 @@
 import ast
+import os
 import re
 import unicodedata
 import warnings
@@ -421,6 +422,8 @@ def save_results(results: list, output_dir: str = "data/final") -> None:
         results: List of result dictionaries from clustering experiments
         output_dir: Directory to save output files
     """
+    os.makedirs(output_dir, exist_ok=True)  # ⬅️ ensure folder exists before saving
+
     for i, res in enumerate(results, start=1):
         neighbors = res['config']['umap_neighbors']
         cluster_size = res['config']['hdb_min_cluster_size']
@@ -446,7 +449,7 @@ def main():
 
     # Define experimental configurations
     configs = [
-        {"umap_neighbors": 10, "hdb_min_cluster_size": 50},
+        {"umap_neighbors": 7, "hdb_min_cluster_size": 20},
         # {"umap_neighbors": 30, "hdb_min_cluster_size": 400},
         # {"umap_neighbors": 50, "hdb_min_cluster_size": 500},
         # {"umap_neighbors": 75, "hdb_min_cluster_size": 1000},

@@ -111,6 +111,7 @@ def save_results_compressed(results: List[Dict], output_file: str) -> None:
         results: List of dictionaries containing parsed data
         output_file: Path to output .csv.gz file
     """
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with gzip.open(output_file, mode='wt', newline='', encoding='utf-8') as gzfile:
         writer = csv.DictWriter(gzfile, fieldnames=CSV_FIELDS)
         writer.writeheader()

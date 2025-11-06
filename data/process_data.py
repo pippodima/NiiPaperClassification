@@ -1,3 +1,4 @@
+import os
 import re
 from html import unescape
 import pandas as pd
@@ -181,7 +182,8 @@ def load_sample_random_rows(path: str, n: int, random_state: int = None) -> pd.D
 
 
 def save(df: pd.DataFrame, path: str = "final/data.csv.gz") -> None:
-    """Save dataframe to compressed CSV."""
+    """Save dataframe to compressed CSV, creating folders if missing."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     df.to_csv(path, index=False, compression="gzip")
     print(f"✅ Saved to {path}")
 

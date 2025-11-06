@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import seaborn as sns
+import os
 
 
 def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
@@ -39,6 +40,7 @@ def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False,
     plt.box(True)
 
     if save:
+        os.makedirs("outputs/plots", exist_ok=True)
         plt.savefig(f"outputs/plots/clusters_scientific_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
 
     plt.show()
@@ -85,4 +87,5 @@ def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_s
 
     fig.show()
     if save:
+        os.makedirs("outputs/html", exist_ok=True)
         fig.write_html(f"outputs/html/clusters_config_scientific_{neighbors}neighbors_{cluster_size}cluster_size.html")
