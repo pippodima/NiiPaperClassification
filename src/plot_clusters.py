@@ -5,8 +5,8 @@ import seaborn as sns
 import os
 
 
-def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
-    # Prepare
+def plot_clusters_static(umap_embeddings, labels, output_path="plots/umap_clusters.png"):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.figure(figsize=(10, 8))
     unique_labels = np.unique(labels)
 
@@ -27,9 +27,7 @@ def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False,
     )
 
     # Style
-    plt.title(title, fontsize=14, weight="bold", pad=12)
-    plt.xlabel("UMAP Dimension 1")
-    plt.ylabel("UMAP Dimension 2")
+    plt.title("UMAP Clusters", fontsize=14, weight="bold", pad=12)
     plt.grid(False)
     plt.xticks([])
     plt.yticks([])
@@ -38,54 +36,76 @@ def plot_embedding(umap_embeddings, labels, neighbors, cluster_size, save=False,
     # Add subtle white background and frame
     plt.gca().set_facecolor("#fafafa")
     plt.box(True)
-
-    if save:
-        os.makedirs("outputs/plots", exist_ok=True)
-        plt.savefig(f"outputs/plots/clusters_scientific_config_{neighbors}neighbors_{cluster_size}cluster_size.png")
-
+    plt.savefig(output_path, dpi=200)
+    plt.close()
     plt.show()
+    print(f"📊 Saved static cluster plot → {output_path}")
 
 
-def plot_embedding_interactive(df, umap_embeddings, labels, neighbors, cluster_size, save=False, title="Clusters of Papers by Abstract Similarity"):
-    # Add embeddings and labels to DataFrame
-    df = df.copy()
-    df["x"] = umap_embeddings[:, 0]
-    df["y"] = umap_embeddings[:, 1]
-    df["cluster"] = labels
+def plot_clusters_interactive(df, umap_embeddings, output_path="plots/umap_clusters.html"):
+    """Generate an interactive HTML plot with detailed hover info and cluster filtering."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # Prepare hover text
-    df["hover_text"] = df["title"].fillna("No title").astype(str).str.slice(0, 150)
+    df_plot = df.copy()
+    df_plot["x"] = umap_embeddings[:, 0]
+    df_plot["y"] = umap_embeddings[:, 1]
 
-    # Outliers (-1) → gray color
-    df["cluster_str"] = df["cluster"].astype(str)
-    df.loc[df["cluster"] == -1, "cluster_str"] = "Outlier"
+    # Create custom hover text
+    df_plot["hover_text"] = (
+        "<b>Title:</b> " + df_plot["title"].astype(str) +
+        "<br><b>Cluster:</b> " + df_plot["name"].fillna("Unknown").astype(str) +
+        "<br><b>Summary:</b> " + df_plot["summary"].fillna("").astype(str)
+    )
 
-    # Create the interactive scatter plot
+    # Build interactive scatter plot
     fig = px.scatter(
-        df,
+        df_plot,
         x="x",
         y="y",
-        color="cluster_str",
-        hover_data={"title": True, "cluster_str": True},
-        hover_name="hover_text",
-        opacity=0.7,
-        color_discrete_sequence=px.colors.qualitative.Set2,
-        title=title,
-        width=1000,
-        height=800
+        color="name",
+        hover_name="title",              # large title at top of hover box
+        hover_data={
+            "cluster_id": True,
+            "summary": True,
+            "x": False,
+            "y": False
+        },
+        text=None,
+        title="Interactive Cluster Visualization (Hover for Paper Details)",
+        opacity=0.85,
+        template="plotly_white",
     )
 
-    # Style
-    fig.update_traces(marker=dict(size=6, line=dict(width=0)))
+    # Replace default hover with our rich custom text
+    fig.update_traces(marker=dict(size=6), hovertemplate=df_plot["hover_text"])
+
+    # Add cluster filter dropdown
+    cluster_names = sorted(df_plot["name"].dropna().unique())
+    buttons = [
+        dict(label="All Clusters",
+             method="update",
+             args=[{"visible": [True] * len(fig.data)},
+                   {"title": "All Clusters"}])
+    ]
+    for cname in cluster_names:
+        visible = [trace.name == cname for trace in fig.data]
+        buttons.append(
+            dict(label=cname,
+                 method="update",
+                 args=[{"visible": visible},
+                       {"title": f"Cluster: {cname}"}])
+        )
     fig.update_layout(
-        plot_bgcolor="white",
-        xaxis=dict(showgrid=False, showticklabels=False),
-        yaxis=dict(showgrid=False, showticklabels=False),
-        title_font=dict(size=20, family="Arial", color="black"),
-        legend_title_text="Cluster ID",
+        updatemenus=[dict(
+            active=0,
+            buttons=buttons,
+            x=1.05,
+            xanchor="left",
+            y=1,
+            yanchor="top"
+        )],
+        margin=dict(l=40, r=40, t=60, b=40)
     )
 
-    fig.show()
-    if save:
-        os.makedirs("outputs/html", exist_ok=True)
-        fig.write_html(f"outputs/html/clusters_config_scientific_{neighbors}neighbors_{cluster_size}cluster_size.html")
+    fig.write_html(output_path, include_plotlyjs="cdn")
+    print(f"🌐 Saved interactive HTML plot → {output_path}")

@@ -1,522 +1,189 @@
 import argparse
 import ast
-from datetime import datetime
 import json
-import os
-import re
-import unicodedata
-import warnings
-import mojimoji
-import numpy as np
+from datetime import datetime
 import pandas as pd
-from bs4 import BeautifulSoup
-from sklearn.feature_extraction.text import TfidfVectorizer
-from umap import UMAP
-import hdbscan
 from tqdm import tqdm
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
+from umap import UMAP
+from plot_clusters import *
+import hdbscan
 import ollama
-
-from plot_clusters import plot_embedding, plot_embedding_interactive
-
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# ============================================================================
-# CONSTANTS
-# ============================================================================
-
-BOILERPLATE_WORDS = {
-    "type", "text", "article", "pdf", "application", "identifier",
-    "source", "contents", "bulletin", "journal", "paper", "pp",
-    "vol", "board", "editorial", "university", "departmental",
-    "report", "reports", "note", "title", "body", "class",
-    "art", "black",
-    # Japanese structural tokens
-    "表紙", "裏表紙", "目次", "総目次", "索引", "奥付", "会告など",
-    "編集後記", "巻頭言", "論文", "紀要", "紀要類", "センタ",
-    "報告", "年報", "編集委員",
-    # misc
-    "application/pdf", "pdf/application", "type/text",
-}
-
-# Compile regex patterns once at module level
-URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
-EMAIL_PATTERN = re.compile(r"\S+@\S+")
-FILE_PATTERN = re.compile(r"\b\w+\.(pdf|docx?|xlsx?|txt)\b")
-NON_USEFUL_CHARS = re.compile(r"[^ぁ-んァ-ン一-龥a-z0-9\s]")
-SINGLE_LETTER = re.compile(r"\b[a-z]\b")
-WHITESPACE = re.compile(r"\s+")
-
+import torch
+import warnings
+warnings.filterwarnings("ignore")
 
 # ============================================================================
 # DATA LOADING
 # ============================================================================
 
-def load_embeddings(path: str, subset: str = "full") -> tuple:
-    """
-    Load gzipped CSV with stringified embeddings and convert to numpy array.
 
-    Args:
-        path: Path to the gzipped CSV file
-        subset: Data subset - 'full', 'scientific_paper', or 'diagnostic_report'
-
-    Returns:
-        Tuple of (DataFrame, embeddings array)
-    """
-    print(f"📂 Loading dataset from {path} ...")
-    df = pd.read_csv(path, compression="gzip")
+def load_embeddings_parquet(path: str) -> tuple:
+    print(f"📂 Loading {path}")
+    df = pd.read_parquet(path)
     print(f"✅ Loaded {len(df)} rows")
-
-    # Apply subset filter if needed
-    if subset != "full":
-        if "type" not in df.columns:
-            raise ValueError("❌ Dataset must have a 'type' column for subsetting.")
-        df = df[df["type"] == subset]
-        print(f"🔍 Subset to {subset}: {len(df)} rows")
-
-    # Parse embeddings from string to numpy array
     tqdm.pandas(desc="Parsing embeddings")
     embeddings = np.stack(
-        df["embedding"].progress_apply(lambda x: np.array(ast.literal_eval(x), dtype=np.float32))
+        df["embedding"].progress_apply(lambda x: np.array(ast.literal_eval(x)) if isinstance(x, str) else np.array(x))
     )
-
-    # Create combined text field for analysis
-    df = create_combined_text(df)
-
-    return df, embeddings
-
-
-def create_combined_text(df: pd.DataFrame) -> pd.DataFrame:
-    """Combine title and abstract into a single text field."""
-    if "title" in df.columns and "abstract" in df.columns:
-        df["combined_text"] = df["title"].fillna("") + ". " + df["abstract"].fillna("")
-    elif "title" in df.columns:
-        df["combined_text"] = df["title"]
-    else:
-        raise ValueError("❌ Dataset must contain at least a 'title' column.")
-
-    return df
-
-
-# ============================================================================
-# TEXT CLEANING
-# ============================================================================
-
-def clean_text_for_tfidf(text: str) -> str:
-    """
-    Clean text for TF-IDF analysis, preserving informative words.
-    Less aggressive than before — avoids deleting entire texts.
-    """
-    if not isinstance(text, str) or not text.strip():
-        return ""
-
-    # --- Remove HTML / normalize ---
-    text = BeautifulSoup(text, "lxml").get_text(separator=" ")
-    text = unicodedata.normalize("NFKC", text)
-    text = mojimoji.zen_to_han(text, kana=False)
-
-    # --- Remove URLs, emails, file refs ---
-    text = URL_PATTERN.sub(" ", text)
-    text = EMAIL_PATTERN.sub(" ", text)
-    text = FILE_PATTERN.sub(" ", text)
-
-    # --- Lowercase for English; leave Japanese intact ---
-    text = text.lower()
-
-    # --- Keep useful characters (Japanese, English, digits, basic symbols) ---
-    text = re.sub(r"[^ぁ-んァ-ン一-龥a-zA-Z0-9\s\-‐–—・､,\.]", " ", text)
-
-    # --- Remove boilerplate words (looser: only long exact matches) ---
-    boilerplate_pattern = r"\b(" + "|".join(map(re.escape, BOILERPLATE_WORDS)) + r")\b"
-    text = re.sub(boilerplate_pattern, " ", text)
-
-    # --- Don’t kill isolated single letters completely; just normalize ---
-    text = re.sub(r"\b[a-z]\b(?!\d)", " ", text)
-
-    # --- Normalize whitespace ---
-    text = re.sub(r"\s+", " ", text).strip()
-
-    # --- Fallback: if everything’s gone, keep minimal stub ---
-    if len(text.split()) < 2 and len(text) < 5:
-        return "placeholdertext"
-
-    return text
-
-
-def clean_dataframe_for_tfidf(df: pd.DataFrame, text_col: str = "combined_text") -> pd.DataFrame:
-    """Apply text cleaning to specified column in dataframe."""
-    df["cleaned_for_tfidf"] = df[text_col].astype(str).map(clean_text_for_tfidf)
-    return df
-
-
-# ============================================================================
-# DIMENSIONALITY REDUCTION
-# ============================================================================
-
-def perform_umap(
-    embeddings: np.ndarray,
-    n_neighbors: int = 100,
-    min_dist: float = 0.1,
-    n_components: int = 10,
-    random_state: int = 42,
-    metric: str = "cosine"
-) -> np.ndarray:
-    """
-    Apply UMAP dimensionality reduction to embeddings.
-    Uses cosine distance for text embeddings.
-    """
-    umap_model = UMAP(
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        n_components=n_components,
-        metric=metric,
-        random_state=random_state,
-        verbose=False,
-    )
-    return umap_model.fit_transform(embeddings)
+    df["combined_text"] = df["title"].fillna("") + ". " + df["clean_abstract"].fillna("")
+    return df, normalize(embeddings)
 
 
 # ============================================================================
 # CLUSTERING
 # ============================================================================
 
-def perform_hdbscan(embeddings: np.ndarray, min_cluster_size: int = 300,
-                    min_samples: int = 10, epsilon: float = 0.3) -> np.ndarray:
-    """
-    Apply HDBSCAN clustering to embeddings.
+def perform_umap(embeddings, n_neighbors=15, min_dist=0.1, n_components=10, random_state=42):
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"🔧 Running UMAP on {device}")
+    umap_model = UMAP(
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        n_components=n_components,
+        metric="cosine",
+        random_state=random_state,
+        verbose=False,
+        low_memory=True
+    )
+    return umap_model.fit_transform(embeddings)
 
-    Args:
-        embeddings: Input vectors to cluster
-        min_cluster_size: Minimum cluster size
-        min_samples: Minimum samples for core points
-        epsilon: Cluster selection epsilon
 
-    Returns:
-        Cluster labels (-1 for outliers)
-    """
+def perform_hdbscan(embeddings, min_cluster_size=30, min_samples=5, epsilon=0.3):
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         cluster_selection_epsilon=epsilon,
-        cluster_selection_method='leaf'
+        cluster_selection_method="leaf",
+        gen_min_span_tree=False
     )
     return clusterer.fit_predict(embeddings)
 
 
+def auto_optimize_clustering(embeddings):
+    # 🏆 Best config: {'neighbors': 5, 'min_dist': 0.2, 'cluster_size': 10}(score=132.316)
+    configs = []
+    for n in [5]:  # [5, 10, 20]
+        for d in [0.2]:  # [0.05, 0.1, 0.2]
+            for c in [10]:  # [10, 20, 50]
+                configs.append({"neighbors": n, "min_dist": d, "cluster_size": c})
+
+    best_score, best_cfg, best_labels, best_umap = -1, None, None, None
+
+    for cfg in tqdm(configs, desc="🔎 Auto-tuning clustering"):
+        reduced = perform_umap(embeddings, n_neighbors=cfg["neighbors"], min_dist=cfg["min_dist"])
+        labels = perform_hdbscan(reduced, min_cluster_size=cfg["cluster_size"])
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        outliers = list(labels).count(-1)
+        score = n_clusters / (1 + outliers / max(1, len(labels)))
+        if score > best_score:
+            best_score, best_cfg, best_labels, best_umap = score, cfg, labels, reduced
+
+    print(f"🏆 Best config: {best_cfg} (score={best_score:.3f})")
+    return best_umap, best_labels, best_cfg
+
+
 # ============================================================================
-# CLUSTER LABELING
+# CLUSTER LABELING & SUMMARIES
 # ============================================================================
 
-def extract_top_tfidf_terms(texts: list, top_n: int = 10) -> list:
-    """Extract top TF-IDF terms from a collection of texts, safely handling empty vocabularies."""
-    # Remove empty or whitespace-only texts
+def extract_top_tfidf_terms(texts, top_n=10):
     texts = [t for t in texts if isinstance(t, str) and t.strip()]
     if not texts:
         return ["placeholdertext"]
-
     vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
     try:
         x = vectorizer.fit_transform(texts)
     except ValueError:
-        # Happens when all words are stopwords or removed
         return ["placeholdertext"]
-
-    if x.shape[1] == 0:
-        return ["placeholdertext"]
-
     tfidf_sum = np.asarray(x.sum(axis=0)).ravel()
-    if tfidf_sum.size == 0:
-        return ["placeholdertext"]
-
     terms = np.array(vectorizer.get_feature_names_out())
     top_indices = np.argsort(tfidf_sum)[::-1][:top_n]
-    return terms[top_indices].tolist() or ["placeholdertext"]
+    return terms[top_indices].tolist()
 
 
-def generate_llm_cluster_name(keywords: str, llm_model: str = "qwen3:1.7b") -> str:
-    """
-    Generate a semantic cluster name using Ollama LLM.
-
-    Args:
-        keywords: Comma-separated keywords representing the cluster
-        llm_model: Ollama model to use
-
-    Returns:
-        Generated topic name
-    """
+def generate_llm_label(keywords, llm_model="mistral:7b"):
     prompt = f"""You are a research topic summarizer.
-The following keywords are representative of a cluster of academic papers:
+The following keywords describe a scientific topic cluster:
 {keywords}
-
-Suggest a concise, human-readable topic name (2–4 words),
-e.g. "Cancer Biology", "Antarctic Climate Studies", "Japanese Linguistics".
-Only return the topic name."""
-
+Return only a concise 2–4 word topic name."""
     try:
-        response = ollama.chat(
-            model=llm_model,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        topic_name = response["message"]["content"].strip()
-        # Clean up potential thinking tags
-        topic_name = topic_name.replace("<think>", "").split("</think>")[-1].strip()
-        return topic_name
-    except Exception as e:
-        print(f"⚠️ Ollama naming failed: {e}")
+        response = ollama.chat(model=llm_model, messages=[{"role": "user", "content": prompt}])
+        name = response["message"]["content"].strip()
+        name = name.replace("<think>", "").split("</think>")[-1].strip()
+        return name
+    except Exception:
         return None
 
 
-def name_clusters(df: pd.DataFrame, labels: np.ndarray, text_col: str = "combined_text",
-                  method: str = "llm", top_n_words: int = 10,
-                  llm_model: str = "qwen3:1.7b") -> tuple:
-    """
-    Assign meaningful names to clusters using TF-IDF or LLM.
+def generate_cluster_summary(texts, llm_model="mistral:7b"):
+    joined = "\n".join(texts[:5])
+    prompt = f"""Summarize the following research abstracts in one concise sentence:
+{joined}
+Return only the summary."""
+    try:
+        response = ollama.chat(model=llm_model, messages=[{"role": "user", "content": prompt}])
+        name = response["message"]["content"].strip()
+        name = name.replace("<think>", "").split("</think>")[-1].strip()
+        return name
+    except Exception:
+        return None
 
-    Args:
-        df: DataFrame containing text data
-        labels: Cluster labels from clustering algorithm
-        text_col: Column name containing text to analyze
-        method: Naming method - 'tfidf' (keyword-based) or 'llm' (semantic)
-        top_n_words: Number of top TF-IDF terms to extract
-        llm_model: Ollama model to use for LLM naming
 
-    Returns:
-        Tuple of (updated DataFrame, cluster names dict)
-    """
+def label_and_summarize_clusters(df, labels, text_col="combined_text",
+                                 llm_model="mistral:7b", fast=False):
     df["cluster_id"] = labels
-    cluster_names = {}
+    cluster_info = []
 
-    for cluster_id in tqdm(sorted(set(labels)), desc="🧠 Naming clusters"):
-        # Handle outliers
-        if cluster_id == -1:
-            cluster_names[cluster_id] = "Outliers"
+    for cid in tqdm(sorted(set(labels)), desc="🧠 Labeling clusters"):
+        if cid == -1:
             continue
-
-        # Get texts for this cluster
-        cluster_texts = df.loc[df["cluster_id"] == cluster_id, text_col].dropna().tolist()
+        cluster_texts = df.loc[df["cluster_id"] == cid, text_col].dropna().tolist()
         if not cluster_texts:
-            cluster_names[cluster_id] = "Unknown"
             continue
-
-        # Extract representative keywords via TF-IDF
-        top_terms = extract_top_tfidf_terms(cluster_texts, top_n_words)
-        if not top_terms or all(t == "placeholdertext" for t in top_terms):
-            cluster_names[cluster_id] = "Unknown"
-            continue
-
-        # Use TF-IDF method
-        if method == "tfidf":
-            cluster_names[cluster_id] = " / ".join(top_terms[:3])
-            continue
-
-        # Use LLM method
+        top_terms = extract_top_tfidf_terms(cluster_texts, 10)
         keywords = ", ".join(top_terms)
-        llm_name = generate_llm_cluster_name(keywords, llm_model)
-        cluster_names[cluster_id] = llm_name or " / ".join(top_terms[:3])
-
-    df["cluster_name"] = df["cluster_id"].map(cluster_names)
-    return df, cluster_names
-
-
-# ============================================================================
-# EXPERIMENT CONFIGURATION
-# ============================================================================
-
-def run_single_configuration(df: pd.DataFrame, embeddings: np.ndarray, config: dict,
-                             name_method: str = "llm", savefig: bool = False) -> dict:
-    """
-    Run clustering pipeline with a single configuration.
-
-    Args:
-        df: Input dataframe
-        embeddings: Embedding vectors
-        config: Configuration dictionary with UMAP and HDBSCAN parameters
-        name_method: Cluster naming method ('tfidf' or 'llm')
-        savefig: Whether to save generated figures
-
-    Returns:
-        Dictionary containing results (df, labels, cluster_names)
-    """
-    # Perform dimensionality reduction
-    reduced_embeddings = perform_umap(
-        embeddings,
-        n_neighbors=config.get("umap_neighbors", 100),
-        min_dist=config.get("umap_min_dist", 0.2),
-        n_components=config.get("umap_components", 10)
-    )
-
-    # Perform clustering
-    labels = perform_hdbscan(
-        reduced_embeddings,
-        min_cluster_size=config.get("hdb_min_cluster_size", 300),
-        min_samples=config.get("hdb_min_samples", 10),
-        epsilon=config.get("hdb_epsilon", 0.3)
-    )
-
-    # Calculate metrics
-    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_outliers = list(labels).count(-1)
-    print(f"📊 Clusters: {n_clusters} | 🚫 Outliers: {n_outliers}")
-
-    # Prepare dataframe
-    df_temp = df.copy()
-    df_temp["cluster_id"] = labels
-    df_temp = clean_dataframe_for_tfidf(df_temp, text_col="combined_text")
-
-    # Generate cluster names
-    df_labeled, cluster_names = name_clusters(
-        df_temp,
-        labels,
-        text_col="cleaned_for_tfidf",
-        method=name_method,
-        llm_model="qwen3:1.7b"
-    )
-
-    # Display cluster names
-    print("🏷️ Cluster names:")
-    for cid, name in cluster_names.items():
-        if cid != -1:
-            print(f"  - {cid}: {name}")
-
-    # Generate visualizations
-    if savefig or True:  # Always attempt plotting
-        try:
-            umap_2d = perform_umap(embeddings, n_neighbors=15, min_dist=0.1, n_components=2)
-            plot_embedding(
-                umap_embeddings=umap_2d,
-                labels=labels,
-                neighbors=config.get("umap_neighbors"),
-                cluster_size=config.get("hdb_min_cluster_size"),
-                save=savefig
-            )
-            plot_embedding_interactive(
-                df=df_labeled,
-                umap_embeddings=umap_2d,
-                labels=labels,
-                neighbors=config.get("umap_neighbors"),
-                cluster_size=config.get("hdb_min_cluster_size"),
-                save=savefig
-            )
-        except Exception as e:
-            print(f"⚠️ Skipped plotting: {e}")
-
-    return {
-        "config": config,
-        "df": df_labeled,
-        "labels": labels,
-        "cluster_names": cluster_names,
-        "reduced_embeddings": reduced_embeddings,
-    }
-
-
-def try_multiple_configurations(df: pd.DataFrame, embeddings: np.ndarray, configs: list,
-                                name_method: str = "llm", savefig: bool = False) -> list:
-    """
-    Run clustering under multiple configurations and compare results.
-
-    Args:
-        df: Input dataframe
-        embeddings: Embedding vectors
-        configs: List of configuration dictionaries
-        name_method: Cluster naming method ('tfidf' or 'llm')
-        savefig: Whether to save generated figures
-
-    Returns:
-        List of result dictionaries, one per configuration
-    """
-    results = []
-
-    for i, config in enumerate(configs, start=1):
-        print(f"\n{'=' * 60}")
-        print(f"⚙️  Running configuration {i}/{len(configs)}: {config}")
-        print(f"{'=' * 60}")
-
-        result = run_single_configuration(df, embeddings, config, name_method, savefig)
-        results.append(result)
-
-    return results
-
-
-# ============================================================================
-# I/O OPERATIONS
-# ============================================================================
-
-def save_results(results: list, output_dir: str = "data/final") -> None:
-    """
-    Save clustering results to disk, including metadata, true centroids, and summary log.
-    Centroids are computed directly from the UMAP-reduced embeddings, not from the DataFrame.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    summary_records = []
-
-    for res in results:
-        cfg = res["config"]
-        neighbors = cfg["umap_neighbors"]
-        cluster_size = cfg["hdb_min_cluster_size"]
-
-        # --- Save main clustered data ---
-        csv_path = f"{output_dir}/clusters_config_{neighbors}neighbors_{cluster_size}cluster_size.csv.gz"
-        print(f"💾 Saving cluster assignments → {csv_path}")
-        res["df"].to_csv(csv_path, index=False, compression="gzip")
-
-        # --- Save UMAP-reduced embeddings ---
-        if "reduced_embeddings" in res:
-            umap_path = f"{output_dir}/umap_{neighbors}_{cluster_size}.npz"
-            np.savez_compressed(umap_path, embeddings=res["reduced_embeddings"])
-            print(f"💾 Saved reduced embeddings → {umap_path}")
-
-        # --- Compute and save cluster centroids (using reduced embeddings) ---
-        valid_mask = res["labels"] != -1
-        embeddings = res["reduced_embeddings"][valid_mask]
-        cluster_ids = np.array(res["labels"])[valid_mask]
-
-        centroids = []
-        for cid in np.unique(cluster_ids):
-            mask = cluster_ids == cid
-            centroid_vec = embeddings[mask].mean(axis=0)
-            centroids.append({
-                "cluster_id": int(cid),
-                **{f"dim_{i}": float(v) for i, v in enumerate(centroid_vec)}
-            })
-
-        df_centroids = pd.DataFrame(centroids)
-        centroids_path = f"{output_dir}/centroids_{neighbors}_{cluster_size}.csv.gz"
-        df_centroids.to_csv(centroids_path, index=False, compression="gzip")
-        print(f"💾 Saved cluster centroids → {centroids_path}")
-
-        # --- Save metadata JSON ---
-        cluster_names = res.get("cluster_names", {})
-        cluster_names_safe = {str(int(k)): v for k, v in cluster_names.items()}
-
-        meta = {
-            "config": cfg,
-            "n_clusters": len(set(res["labels"])) - (1 if -1 in res["labels"] else 0),
-            "n_outliers": int(list(res["labels"]).count(-1)),
-            "timestamp": datetime.now().isoformat(),
-            "cluster_names": cluster_names_safe,
-        }
-        meta_path = f"{output_dir}/metadata_{neighbors}_{cluster_size}.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
-        print(f"💾 Saved metadata → {meta_path}")
-
-        # --- Add to summary ---
-        summary_records.append({
-            "umap_neighbors": neighbors,
-            "hdb_min_cluster_size": cluster_size,
-            "n_clusters": meta["n_clusters"],
-            "n_outliers": meta["n_outliers"],
-            "timestamp": meta["timestamp"],
+        name = " / ".join(top_terms[:3])
+        summary = ""
+        if not fast and len(cluster_texts) >= 500:
+            llm_name = generate_llm_label(keywords, llm_model)
+            name = llm_name or name
+            summary = generate_cluster_summary(cluster_texts, llm_model) if not fast else None
+        cluster_info.append({
+            "cluster_id": cid,
+            "keywords": top_terms,
+            "name": name,
+            "summary": summary or "",
+            "size": len(cluster_texts)
         })
 
-    # --- Append/Write summary CSV ---
-    summary_path = os.path.join(output_dir, "results_summary.csv")
-    summary_df = pd.DataFrame(summary_records)
-    if os.path.exists(summary_path):
-        old = pd.read_csv(summary_path)
-        summary_df = pd.concat([old, summary_df], ignore_index=True).drop_duplicates()
-    summary_df.to_csv(summary_path, index=False)
-    print(f"🧾 Updated summary log → {summary_path}")
+    info_df = pd.DataFrame(cluster_info)
+    df = df.merge(info_df[["cluster_id", "name", "summary"]], on="cluster_id", how="left")
+    return df, info_df
+
+
+# ============================================================================
+# RE-LABELING MODE
+# ============================================================================
+
+def relabel_clusters(input_path, llm_model="mistral:7b", fast=False):
+    print(f"♻️ Re-labeling clusters in {input_path}")
+    df = pd.read_parquet(input_path)
+    if "cluster_id" not in df.columns:
+        raise ValueError("❌ Missing cluster_id column; cannot relabel.")
+    labels = df["cluster_id"].to_numpy()
+    unlabeled = df[df["name"].isna() | (df["name"] == "")]
+    if unlabeled.empty:
+        print("✅ All clusters already labeled.")
+        return
+    df_updated, info_df = label_and_summarize_clusters(
+        df, labels, fast=fast, llm_model=llm_model
+    )
+    out_path = input_path.replace(".parquet", "_relabeled.parquet")
+    df_updated.to_parquet(out_path, index=False)
+    print(f"💾 Saved updated file → {out_path}")
+    info_df.to_parquet(out_path.replace(".parquet", "_metadata.parquet"), index=False)
 
 
 # ============================================================================
@@ -524,54 +191,46 @@ def save_results(results: list, output_dir: str = "data/final") -> None:
 # ============================================================================
 
 def main():
-    """Execute the clustering pipeline."""
-    parser = argparse.ArgumentParser(description="Create Cluster saving options")
-    parser.add_argument(
-        "-save-result-csv",
-        "--save-result-csv",
-        type=float,
-        default=True,
-        help="True if you want to save csv with clustering column (default: False)",
-    )
-    parser.add_argument(
-        "-save-plots",
-        "--save-plots",
-        type=float,
-        default=True,
-        help="True if you want to save fig and html plots (default: False)",
-    )
-
+    parser = argparse.ArgumentParser(description="Cluster embeddings and label topics")
+    parser.add_argument("--input", type=str, default="data/final/data_sci.parquet")
+    parser.add_argument("--output", type=str, default="data/results/")
+    parser.add_argument("--fast", action="store_true", help="Skip LLM labeling and summaries")
+    parser.add_argument("--relabel", type=str, help="Path to clustered parquet file to relabel only")
     args = parser.parse_args()
 
-    # Configuration
-    SAVE_RESULTS = args.save_result_csv
-    SAVE_FIGURES = args.save_plots
-    INPUT_PATH = "data/final/data.csv.gz"
+    if args.relabel:
+        relabel_clusters(args.relabel, fast=args.fast)
+        return
 
-    # Load data
-    df, embeddings = load_embeddings(path=INPUT_PATH, subset="scientific_paper")
+    df, embeddings = load_embeddings_parquet(args.input)
+    umap_embeddings, labels, best_cfg = auto_optimize_clustering(embeddings)
 
-    # Define experimental configurations
-    configs = [
-        {"umap_neighbors": 5, "hdb_min_cluster_size": 10},
-        # {"umap_neighbors": 15, "hdb_min_cluster_size": 100},
-        # {"umap_neighbors": 40, "hdb_min_cluster_size": 800},
-        # {"umap_neighbors": 80, "hdb_min_cluster_size": 2000},
-    ]
-
-    # Run experiments
-    # Choose naming method: "tfidf" (fast) or "llm" (Ollama semantic)
-    results = try_multiple_configurations(
-        df, embeddings, configs,
-        name_method="tfidf",
-        savefig=SAVE_FIGURES
+    df_labeled, cluster_info = label_and_summarize_clusters(
+        df, labels, llm_model="qwen3:1.7b", fast=args.fast
     )
 
-    # Save results if configured
-    if SAVE_RESULTS:
-        save_results(results=results, output_dir="data/results")
+    # Save results
+    os.makedirs(args.output, exist_ok=True)
+    out_path = os.path.join(args.output, "clustered_data.parquet")
+    df_labeled.to_parquet(out_path, index=False)
+    cluster_info.to_parquet(os.path.join(args.output, "cluster_metadata.parquet"), index=False)
+    print(f"💾 Saved labeled data → {out_path}")
 
-    print("\n✅ All experiments complete!")
+    # Plots
+    plot_clusters_static(umap_embeddings, labels, os.path.join(args.output, "umap_clusters.png"))
+    plot_clusters_interactive(df_labeled, umap_embeddings, os.path.join(args.output, "umap_clusters.html"))
+
+    # Metadata
+    metadata = {
+        "timestamp": datetime.now().isoformat(),
+        "best_config": best_cfg,
+        "n_clusters": len(set(labels)) - (1 if -1 in labels else 0),
+        "n_outliers": int(list(labels).count(-1)),
+        "fast_mode": args.fast,
+    }
+    with open(os.path.join(args.output, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    print("✅ Clustering complete.")
 
 
 if __name__ == "__main__":
