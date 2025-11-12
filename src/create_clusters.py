@@ -12,7 +12,9 @@ import hdbscan
 import ollama
 import torch
 import warnings
+
 warnings.filterwarnings("ignore")
+
 
 # ============================================================================
 # DATA LOADING
@@ -64,9 +66,9 @@ def perform_hdbscan(embeddings, min_cluster_size=30, min_samples=5, epsilon=0.3)
 def auto_optimize_clustering(embeddings):
     # 🏆 Best config: {'neighbors': 5, 'min_dist': 0.2, 'cluster_size': 10}(score=132.316)
     configs = []
-    for n in [5]:  # [5, 10, 20]
-        for d in [0.2]:  # [0.05, 0.1, 0.2]
-            for c in [10]:  # [10, 20, 50]
+    for n in [5]:  # [5, 10, 20]:
+        for d in [0.2]:  # [0.05, 0.1, 0.2]:
+            for c in [10]:  # [10, 20, 50]:
                 configs.append({"neighbors": n, "min_dist": d, "cluster_size": c})
 
     best_score, best_cfg, best_labels, best_umap = -1, None, None, None
@@ -88,15 +90,32 @@ def auto_optimize_clustering(embeddings):
 # CLUSTER LABELING & SUMMARIES
 # ============================================================================
 
+CUSTOM_STOPWORDS = {
+    "type", "text", "article", "pdf", "application", "identifier", "journal",
+    "report", "paper", "source", "bulletin", "表紙", "裏表紙", "目次", "奥付",
+    "論文", "特集", "記事", "編集後記", "会告", "概要", "summary", "study",
+    "results", "method", "analysis", "introduction", "conclusion", "abstract",
+    "vol", "no", "pp", "http", "https", "handle", "jp", "en", "dataset", "1", "2",
+    "3", "p", "pp", "s", "c", "4", "8", "18", "12"
+}
+
+
 def extract_top_tfidf_terms(texts, top_n=10):
     texts = [t for t in texts if isinstance(t, str) and t.strip()]
     if not texts:
         return ["placeholdertext"]
-    vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-    try:
-        x = vectorizer.fit_transform(texts)
-    except ValueError:
-        return ["placeholdertext"]
+
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        max_features=5000,
+        token_pattern=r"(?u)\b\w+\b",
+        lowercase=True
+    )
+
+    # merge built-in English stopwords + your custom list
+    vectorizer.stop_words_ = vectorizer.get_stop_words().union(CUSTOM_STOPWORDS)
+
+    x = vectorizer.fit_transform(texts)
     tfidf_sum = np.asarray(x.sum(axis=0)).ravel()
     terms = np.array(vectorizer.get_feature_names_out())
     top_indices = np.argsort(tfidf_sum)[::-1][:top_n]
@@ -132,7 +151,7 @@ Return only the summary."""
 
 
 def label_and_summarize_clusters(df, labels, text_col="combined_text",
-                                 llm_model="mistral:7b", fast=False):
+                                 llm_model="mistral:7b", use_llm=False):
     df["cluster_id"] = labels
     cluster_info = []
 
@@ -142,14 +161,18 @@ def label_and_summarize_clusters(df, labels, text_col="combined_text",
         cluster_texts = df.loc[df["cluster_id"] == cid, text_col].dropna().tolist()
         if not cluster_texts:
             continue
+
         top_terms = extract_top_tfidf_terms(cluster_texts, 10)
         keywords = ", ".join(top_terms)
         name = " / ".join(top_terms[:3])
-        summary = ""
-        if not fast and len(cluster_texts) >= 500:
+
+        if use_llm and len(cluster_texts) >= 500:
             llm_name = generate_llm_label(keywords, llm_model)
-            name = llm_name or name
-            summary = generate_cluster_summary(cluster_texts, llm_model) if not fast else None
+            if llm_name:
+                name = llm_name
+
+        summary = generate_cluster_summary(cluster_texts, llm_model) if use_llm else None
+
         cluster_info.append({
             "cluster_id": cid,
             "keywords": top_terms,
@@ -167,8 +190,13 @@ def label_and_summarize_clusters(df, labels, text_col="combined_text",
 # RE-LABELING MODE
 # ============================================================================
 
-def relabel_clusters(input_path, llm_model="mistral:7b", fast=False):
+def relabel_clusters(input_path, llm_model="mistral:7b", use_llm=False):
     print(f"♻️ Re-labeling clusters in {input_path}")
+    if use_llm:
+        print("🧠 Using LLM-based labeling and summaries")
+    else:
+        print("⚡ Skipping all LLM calls (TF-IDF only)")
+
     df = pd.read_parquet(input_path)
     if "cluster_id" not in df.columns:
         raise ValueError("❌ Missing cluster_id column; cannot relabel.")
@@ -177,9 +205,11 @@ def relabel_clusters(input_path, llm_model="mistral:7b", fast=False):
     if unlabeled.empty:
         print("✅ All clusters already labeled.")
         return
+
     df_updated, info_df = label_and_summarize_clusters(
-        df, labels, fast=fast, llm_model=llm_model
+        df, labels, use_llm=use_llm, llm_model=llm_model
     )
+
     out_path = input_path.replace(".parquet", "_relabeled.parquet")
     df_updated.to_parquet(out_path, index=False)
     print(f"💾 Saved updated file → {out_path}")
@@ -194,19 +224,24 @@ def main():
     parser = argparse.ArgumentParser(description="Cluster embeddings and label topics")
     parser.add_argument("--input", type=str, default="data/final/data_sci.parquet")
     parser.add_argument("--output", type=str, default="data/results/")
-    parser.add_argument("--fast", action="store_true", help="Skip LLM labeling and summaries")
+    parser.add_argument("--llm", action="store_true", help="Enable LLM labeling and summaries")
     parser.add_argument("--relabel", type=str, help="Path to clustered parquet file to relabel only")
     args = parser.parse_args()
 
+    if args.llm:
+        print("🧠 Using LLM-based labeling and summaries")
+    else:
+        print("⚡ Running without LLM (TF-IDF keywords only)")
+
     if args.relabel:
-        relabel_clusters(args.relabel, fast=args.fast)
+        relabel_clusters(args.relabel, use_llm=args.llm)
         return
 
     df, embeddings = load_embeddings_parquet(args.input)
     umap_embeddings, labels, best_cfg = auto_optimize_clustering(embeddings)
 
     df_labeled, cluster_info = label_and_summarize_clusters(
-        df, labels, llm_model="qwen3:1.7b", fast=args.fast
+        df, labels, llm_model="qwen3:1.7b", use_llm=args.llm
     )
 
     # Save results
@@ -226,7 +261,7 @@ def main():
         "best_config": best_cfg,
         "n_clusters": len(set(labels)) - (1 if -1 in labels else 0),
         "n_outliers": int(list(labels).count(-1)),
-        "fast_mode": args.fast,
+        "use_llm": args.llm,
     }
     with open(os.path.join(args.output, "metadata.json"), "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)

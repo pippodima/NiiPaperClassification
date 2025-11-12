@@ -12,13 +12,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import torch
 from sentence_transformers import SentenceTransformer
 
-
 tqdm.pandas()
+
 
 # ============================================================================
 # TEXT CLEANING
 # ============================================================================
-
 
 def clean_abstract(text: str) -> str:
     """Clean and normalize abstract text by removing HTML, LaTeX, and formatting."""
@@ -27,8 +26,6 @@ def clean_abstract(text: str) -> str:
 
     text = re.sub(r"<[^>]+>", " ", text)
     text = unescape(text)
-
-    # Simplify LaTeX escapes
     text = re.sub(r'\\"([a-zA-Z])', lambda m: m.group(1), text)
     text = re.sub(r"\\'", "", text)
     text = re.sub(r"\$(.*?)\$", r"\1", text)
@@ -76,17 +73,14 @@ def classify_document_type(title: str) -> str:
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=4, max=30))
 def _get_openai_embeddings_batch(client, batch_texts, model):
-    """Internal helper with retry on rate limits."""
     response = client.embeddings.create(model=model, input=batch_texts)
     return [d.embedding for d in response.data]
 
 
 def _generate_openai_embeddings(texts: list, model: str = "text-embedding-3-small") -> list:
-    """Generate multilingual embeddings using OpenAI API."""
     api_key = os.getenv("OPENAI_KEY")
     if not api_key:
         raise ValueError("❌ OPENAI_KEY environment variable not set.")
-
     client = OpenAI(api_key=api_key)
     embeddings = []
 
@@ -94,19 +88,31 @@ def _generate_openai_embeddings(texts: list, model: str = "text-embedding-3-smal
         batch_texts = texts[i:i + 100]
         batch_embeddings = _get_openai_embeddings_batch(client, batch_texts, model)
         embeddings.extend(batch_embeddings)
-        time.sleep(0.5)  # courtesy delay
+        time.sleep(0.5)
 
     embeddings = normalize(embeddings)
     return [emb.tolist() for emb in embeddings]
 
 
+def _get_device() -> str:
+    """Detect the best available device for local embeddings."""
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        print(f"⚡ Using CUDA GPU: {device_name}")
+        return "cuda"
+    elif torch.backends.mps.is_available():
+        print("🍎 Using Apple MPS GPU")
+        return "mps"
+    else:
+        print("💻 No GPU found — using CPU")
+        return "cpu"
+
+
 def _generate_local_embeddings(texts: list,
                                model_name: str = "intfloat/multilingual-e5-small",
                                batch_size: int = 64) -> list:
-    """Generate multilingual embeddings locally using Hugging Face models."""
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"🔍 Using local embedding model: {model_name} on {device}")
-
+    device = _get_device()
+    print(f"🔍 Loading model: {model_name} on {device}")
     model = SentenceTransformer(model_name, device=device)
 
     embeddings = []
@@ -122,7 +128,6 @@ def _generate_local_embeddings(texts: list,
 def generate_embeddings(texts: list,
                         use_openai: bool = True,
                         model_name: str = "text-embedding-3-small") -> list:
-    """Unified embedding generator that supports OpenAI or local model."""
     if use_openai:
         print("🔑 Using OpenAI API for embeddings")
         return _generate_openai_embeddings(texts, model=model_name)
@@ -136,10 +141,15 @@ def generate_embeddings(texts: list,
 # ============================================================================
 
 def drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
-    print("Dropping empty rows")
-    df_clean = df.dropna(subset=['title', 'abstract'])
-    df_clean = df_clean[df_clean['title'].str.strip() != '']
-    df_clean = df_clean[df_clean['abstract'].str.strip() != '']
+    print("Dropping rows where both title and abstract are empty or null")
+
+    # Replace NaN with empty strings first
+    df['title'] = df['title'].fillna('').astype(str)
+    df['abstract'] = df['abstract'].fillna('').astype(str)
+
+    # Drop rows where both title and abstract are empty (after stripping whitespace)
+    df_clean = df[~((df['title'].str.strip() == '') & (df['abstract'].str.strip() == ''))]
+
     return df_clean
 
 
@@ -196,18 +206,39 @@ def save(df: pd.DataFrame, path: str = "final/data.parquet") -> None:
     print(f"✅ Saved to {path} (Parquet format)")
 
 
+def drop_boilerplate_only_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove rows whose titles and abstracts contain only boilerplate words like
+    'type:text', 'application/pdf', 'Departmental Bulletin Paper', etc.
+    """
+    boilerplate_patterns = re.compile(
+        r"^(type|application|departmental|bulletin|text|論文|記事|表紙|裏表紙|奥付|目次)\b",
+        flags=re.IGNORECASE
+    )
+
+    mask = df["clean_abstract"].fillna("").str.match(boilerplate_patterns)
+    dropped = df[mask]
+    if len(dropped) > 0:
+        print(f"🧹 Dropping {len(dropped)} boilerplate-only rows (no semantic content)")
+    return df[~mask].copy()
+
+
 # ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
 def main(use_openai: bool = False):
-    """Execute the full multilingual data processing pipeline."""
-    df = load_df("processed/rdf_results_final.csv.gz")
+    df = load_df("processed/rdf_results_final.csv.gz")#.sample(n=5000, random_state=42)
     print(df.shape)
     df = drop_empty_rows(df)
+    print(df.shape)
     df = apply_clean_text_to_df(df)
+    print(df.shape)
     df_diag, df_sci = classify_documents(df)
     df_sci = add_embeddings_to_df(df_sci, use_openai=use_openai)
+    print(df_sci.shape)
+    df_sci = drop_boilerplate_only_rows(df_sci)
+    print(df_sci.shape)
     save(df_sci, "final/data_sci.parquet")
     save(df_diag, "final/data_diag.parquet")
 
